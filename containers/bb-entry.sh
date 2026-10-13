@@ -21,6 +21,12 @@ export QT_QPA_PLATFORM="${QT_QPA_PLATFORM:-offscreen}"
 export MPLBACKEND="${MPLBACKEND:-Agg}"
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}/xdg-$(id -u)}"
 mkdir -p "$XDG_RUNTIME_DIR" && chmod 700 "$XDG_RUNTIME_DIR" 2>/dev/null || true
+# Agate runs transparent hugepages "always" (defrag "madvise"), and its nodes hold a large page cache.
+# Fresh multi-GB host arrays can then stall for an hour or more in direct reclaim and compaction.
+# BB_THP_DISABLE=1 (default) turns THP off for the run: NumPy's madvise is skipped here, and the
+# final command runs under prctl(PR_SET_THP_DISABLE), which children inherit. Set 0 to opt out.
+export BB_THP_DISABLE="${BB_THP_DISABLE:-1}"
+[ "$BB_THP_DISABLE" = 1 ] && export NUMPY_MADVISE_HUGEPAGE=0
 if [ -n "${BB_CACHE_DIR:-}" ]; then
     export CUPY_CACHE_DIR="${CUPY_CACHE_DIR:-$BB_CACHE_DIR/cupy}"
     export PYOPENCL_CACHE_DIR="${PYOPENCL_CACHE_DIR:-$BB_CACHE_DIR/pyopencl}"
@@ -68,7 +74,7 @@ rec = dict(time_utc=datetime.datetime.now(datetime.timezone.utc).isoformat(times
            python=platform.python_version(), babelviscofdtd=md.version("babelviscofdtd"),
            cupy=md.version("cupy-cuda12x"), host=platform.node(),
            slurm_job=os.environ.get("SLURM_JOB_ID"), slurm_array_task=os.environ.get("SLURM_ARRAY_TASK_ID"),
-           command=cmd)
+           thp_disabled=os.environ.get("BB_THP_DISABLE") == "1", command=cmd)
 # One record per run: append to a JSON-lines log, and keep the latest as provenance.json.
 with open(out + "l", "a") as f:
     f.write(json.dumps(rec) + "\n")
@@ -91,6 +97,15 @@ echo "[bb] ================================================================"
 [ $# -gt 0 ] || set -- python
 if [ "${BB_XVFB:-0}" = 1 ]; then
     unset QT_QPA_PLATFORM
-    exec xvfb-run -a -s "-screen 0 1920x1080x24" "$@"
+    set -- xvfb-run -a -s "-screen 0 1920x1080x24" "$@"
+fi
+if [ "$BB_THP_DISABLE" = 1 ]; then
+    # PR_SET_THP_DISABLE = 41. The setting survives execve, so it covers the command and its children.
+    exec python -c '
+import ctypes, os, sys
+rc = ctypes.CDLL(None, use_errno=True).prctl(41, 1, 0, 0, 0)
+state = next((l.split()[1] for l in open("/proc/self/status") if l.startswith("THP_enabled")), "?")
+print(f"[bb] THP disabled for this run: prctl rc={rc}, THP_enabled={state}", file=sys.stderr, flush=True)
+os.execvp(sys.argv[1], sys.argv[1:])' "$@"
 fi
 exec "$@"

@@ -18,7 +18,7 @@ Upstream base: `upstream/main` at `29b1026` (7 Oct 2026).
 | `ANTIPHON_CHANGELOG.md` | added | 2026-10-13 | This changelog |
 | `containers/README.md` | added | 2026-10-13 | Recipe: build and run the MSI Apptainer image; switch code refs without rebuild |
 | `containers/babelbrain.def` | added | 2026-10-13 | Apptainer definition: CUDA 12.9, Python 3.11, BabelViscoFDTD 1.2.7; no repo code baked in |
-| `containers/bb-entry.sh` | added | 2026-10-13 | Container entrypoint: headless env, provenance, dependency check |
+| `containers/bb-entry.sh` | added | 2026-10-13 | Container entrypoint: headless env, provenance, dependency check, THP disabled by default |
 | `containers/bb-run.sh` | added | 2026-10-13 | Wrapper: fetch the fork and run at BB_REF (branch/tag/SHA) or BB_SRC |
 | `containers/build.sbatch` | added | 2026-10-13 | Slurm CPU job that builds the image |
 | `containers/config.example.sh` | added | 2026-10-13 | Template for site settings (real values live in an ignored config.sh) |
@@ -53,3 +53,13 @@ The local development environment isn't tracked: its recipe lives in the git-ign
 - added `containers/smoke_test.py`
 - added `containers/smoke_test.sbatch`
 - modified `ANTIPHON_CHANGELOG.md`: added the table rows and this entry.
+
+### 2026-10-13: Disable transparent hugepages in MSI runs
+
+Agate nodes run transparent hugepages `always` (defrag `madvise`) and hold a large page cache. Jobs that allocate multi-GB host arrays have stalled for an hour or more in direct reclaim and compaction, as seen in the prod9 elastic runs. The cause is likely, not yet measured.
+- modified `containers/bb-entry.sh`: `BB_THP_DISABLE=1` is the default.
+  - It exports `NUMPY_MADVISE_HUGEPAGE=0` and starts the final command under `prctl(PR_SET_THP_DISABLE)`, which children inherit.
+  - It logs the kernel's `THP_enabled` flag and records `thp_disabled` in `provenance.json`.
+  - `BB_THP_DISABLE=0` opts out.
+  - Tested locally: with it on, the command sees `THP_enabled: 0`; with it off, it sees 1.
+- modified `ANTIPHON_CHANGELOG.md`: updated the table row and added this entry.

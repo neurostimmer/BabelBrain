@@ -16,6 +16,18 @@ Upstream base: `upstream/main` at `29b1026` (7 Oct 2026).
 |---|---|---|---|
 | `.gitignore` | modified | 2026-10-13 | Ignore local Claude Code files: `.claude/` and `CLAUDE.local.md` |
 | `ANTIPHON_CHANGELOG.md` | added | 2026-10-13 | This changelog |
+| `containers/README.md` | added | 2026-10-13 | Recipe: build and run the MSI Apptainer image; switch code refs without rebuild |
+| `containers/babelbrain.def` | added | 2026-10-13 | Apptainer definition: CUDA 12.9, Python 3.11, BabelViscoFDTD 1.2.7; no repo code baked in |
+| `containers/bb-entry.sh` | added | 2026-10-13 | Container entrypoint: headless env, provenance, dependency check |
+| `containers/bb-run.sh` | added | 2026-10-13 | Wrapper: fetch the fork and run at BB_REF (branch/tag/SHA) or BB_SRC |
+| `containers/build.sbatch` | added | 2026-10-13 | Slurm CPU job that builds the image |
+| `containers/config.example.sh` | added | 2026-10-13 | Template for site settings (real values live in an ignored config.sh) |
+| `containers/depcheck.py` | added | 2026-10-13 | Flags when a ref needs dependencies the image lacks |
+| `containers/deps_allow.txt` | added | 2026-10-13 | Allow-list for depcheck.py |
+| `containers/requirements.in` | added | 2026-10-13 | Top-level container dependencies |
+| `containers/requirements.lock.txt` | added | 2026-10-13 | Hash-pinned container dependency lock (cp311 manylinux) |
+| `containers/smoke_test.py` | added | 2026-10-13 | GPU smoke test: imports, CUDA backend, tiny water FDTD |
+| `containers/smoke_test.sbatch` | added | 2026-10-13 | Slurm GPU job for the smoke test |
 
 ## Log
 
@@ -23,3 +35,21 @@ Upstream base: `upstream/main` at `29b1026` (7 Oct 2026).
 
 - modified `.gitignore`: appended three ignore rules (`.claude/`, `CLAUDE.local.md`, `**/CLAUDE.local.md`) so local Claude Code settings, memory and notes are never tracked. Upstream's own `CLAUDE.md` is untouched.
 - added `ANTIPHON_CHANGELOG.md`: this file.
+
+### 2026-10-13: MSI container recipe
+
+This adds an Apptainer recipe for running BabelBrain without the GUI on MSI GPU nodes: CUDA 12.9, Python 3.11, BabelViscoFDTD 1.2.7, CuPy 13.6.0 and NumPy 1.26.4. The image holds only the environment. `bb-run.sh` fetches the fork at run time by `BB_REF` (branch, tag or SHA), so new code needs no rebuild, and `depcheck.py` reports when a ref needs packages the image lacks. Site settings go in an untracked `config.sh`.
+The local development environment isn't tracked: its recipe lives in the git-ignored `env/` and the uv venv in the git-ignored `venv/`.
+- added `containers/README.md`
+- added `containers/babelbrain.def`
+- added `containers/bb-entry.sh`
+- added `containers/bb-run.sh`
+- added `containers/build.sbatch`
+- added `containers/config.example.sh`
+- added `containers/depcheck.py`
+- added `containers/deps_allow.txt`
+- added `containers/requirements.in`
+- added `containers/requirements.lock.txt`
+- added `containers/smoke_test.py`
+- added `containers/smoke_test.sbatch`
+- modified `ANTIPHON_CHANGELOG.md`: added the table rows and this entry.

@@ -1,0 +1,4 @@
+# Known, deliberate differences between a BabelBrain ref's pinned environment and this image.
+# One distribution name per line, then the reason. Read by depcheck.py (baked into the image
+# at build time; set BB_DEPS_ALLOW=<path> to use an edited copy without rebuilding).
+babelviscofdtd 1.2.7 installed; upstream main pins 1.2.4, UserTx/UserTxServerMode/dualTx pin 1.2.7 (1.2.5-1.2.7: wheel packaging, BHTE matrix prep, exact GPU selection by name)

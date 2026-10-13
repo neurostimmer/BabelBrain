@@ -141,3 +141,7 @@ Tests/
 assets/style.css
 PyTest_Reports
 runPytestWin.bat
+# Local Claude Code files (settings, memory, private notes). Never tracked.
+.claude/
+CLAUDE.local.md
+**/CLAUDE.local.md

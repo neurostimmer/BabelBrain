@@ -31,6 +31,8 @@ Upstream base: `upstream/main` at `29b1026` (7 Oct 2026).
 | `TranscranialModeling/BabelIntegrationELEMENT_ARRAY.py` | added | 2026-10-14 | Generic element-array transducer: per-element complex drive from a definition file; volumetric per-element sources; box domain around all elements |
 | `TranscranialModeling/BabelIntegrationBASE.py` | modified | 2026-10-14 | Region hook `DomeRegionMap` in dome mode (default behaviour unchanged) |
 | `BabelBrain/CalculateFieldProcess.py` | modified | 2026-10-14 | Dispatch entry for `TxSystem == 'ElementArray'` |
+| `OfflineBatchExamples/ElementArray/run_element_array.py` | added | 2026-10-14 | Headless driver for ElementArray: water or step-1 mask; writes field metrics (peak, half-max zone, envelope, calibration scale) |
+| `containers/run_element_array.sbatch` | added | 2026-10-14 | Slurm GPU job running the driver in the container |
 
 ## Log
 
@@ -97,4 +99,12 @@ The definition-file format (`element_array_v1`) is documented in the module docs
 - modified `TranscranialModeling/BabelIntegrationBASE.py`: in `UpdateConditions` with `DomeType=True`, a subclass may define `DomeRegionMap(xfield, yfield, zfield)` returning normalised coordinates and the region that must fit in the domain. Without it, the existing hemisphere is used unchanged.
 - modified `BabelBrain/CalculateFieldProcess.py`: `TxSystem == 'ElementArray'` imports the new module; `kargs` must include `ElementArrayFile`.
 - Tested locally on the CPU through `RUN_SIM.RunCases`, in water at PPW 3, with two opposing 8×8 panels of 2.4 mm square elements on a 30 mm sphere. The domain grew on both sides; all 128 elements got their own source voxels; the pressure peak landed on the target voxel. GPU runs follow on MSI.
+- modified `ANTIPHON_CHANGELOG.md`: table rows and this entry.
+
+### 2026-10-14: Headless driver for ElementArray, and its MSI job
+
+- added `OfflineBatchExamples/ElementArray/run_element_array.py`: runs BabelBrain's acoustic step (`RUN_SIM.RunCases`) for a definition file without the GUI. It runs either a synthetic water case (a cubic mask with the target at its centre) or a head case on a step-1 mask. It writes `metrics.json`: the peak and the connected half-maximum zone in voxels and in the Tx frame, |p| at the target, and the calibration scale for a target pressure. With `--envelope-axis`, the same metrics are computed on the standing-wave envelope (|p|² averaged over λ/2 along that axis).
+  - BabelBrain stores `TargetLocation` in the simulation's z orientation but saves the volumes flipped along z. The driver maps it and cross-checks it against the coordinate vectors.
+  - Tested locally on the CPU with a steered synthetic drive: the envelope half-maximum centroid landed at x = 1.99 mm for 2.0 mm requested.
+- added `containers/run_element_array.sbatch`: a GPU job (48 GB, 1 h by default) that runs the driver at `BB_REF` in the container.
 - modified `ANTIPHON_CHANGELOG.md`: table rows and this entry.

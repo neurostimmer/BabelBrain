@@ -41,6 +41,9 @@ def CalculateFieldProcess(queue,Target,TxSystem,**kargs):
     elif TxSystem in ['H317','H246','REMOPD','I12378','ATAC','R15148','R15646','IGT64_500','H301','DomeTx']:
         module_name = f"TranscranialModeling.BabelIntegration{TxSystem}"
         RUN_SIM = importlib.import_module(module_name).RUN_SIM
+    elif TxSystem == 'ElementArray':
+        # generic array defined by a file: kargs must include ElementArrayFile
+        from TranscranialModeling.BabelIntegrationELEMENT_ARRAY import RUN_SIM
     else:
         raise ValueError("TX system " + TxSystem + " is not yet supported")
 

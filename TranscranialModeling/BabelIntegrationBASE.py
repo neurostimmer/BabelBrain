@@ -1971,7 +1971,16 @@ class SimulationConditionsBASE(object):
             Yffs=[np.abs(yf2)]
             
 
-            if DomeType==False:
+            if DomeType and hasattr(self,'DomeRegionMap'):
+                # A subclass can supply its own region that must fit inside the domain (for example, arrays
+                # with elements on both sides of the focus). It returns coordinates normalised so the region
+                # edge is at |value| = 1 on each axis, and the boolean region map.
+                xf2,yf2,zf2,RegionMap=self.DomeRegionMap(xfield,yfield,zfield)
+                Xffs=[np.abs(xf2)]
+                Yffs=[np.abs(yf2)]
+                Zffs=[np.abs(zf2)]
+                IndXMap,IndYMap,IndZMap=np.nonzero(RegionMap)
+            elif DomeType==False:
                 zfRezero=zfield+ZReZero
                 zf2=zfRezero/ZConeLimit
                 Zffs=[zf2]

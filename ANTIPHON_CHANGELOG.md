@@ -28,6 +28,9 @@ Upstream base: `upstream/main` at `29b1026` (7 Oct 2026).
 | `containers/requirements.lock.txt` | added | 2026-10-13 | Hash-pinned container dependency lock (cp312 manylinux) |
 | `containers/smoke_test.py` | added | 2026-10-13 | GPU smoke test: imports, CUDA backend, tiny water FDTD |
 | `containers/smoke_test.sbatch` | added | 2026-10-13 | Slurm GPU job for the smoke test |
+| `TranscranialModeling/BabelIntegrationELEMENT_ARRAY.py` | added | 2026-10-14 | Generic element-array transducer: per-element complex drive from a definition file; volumetric per-element sources; box domain around all elements |
+| `TranscranialModeling/BabelIntegrationBASE.py` | modified | 2026-10-14 | Region hook `DomeRegionMap` in dome mode (default behaviour unchanged) |
+| `BabelBrain/CalculateFieldProcess.py` | modified | 2026-10-14 | Dispatch entry for `TxSystem == 'ElementArray'` |
 
 ## Log
 
@@ -78,3 +81,20 @@ The first image's GPU smoke test (MSI job 3604094) failed for all three refs. On
 - modified `containers/README.md`: versions, basis, and depcheck behaviour.
 - modified `ANTIPHON_CHANGELOG.md`: table rows and this entry.
 - The rebuild (MSI job 3668317) and smoke test (3668318) are queued; results go in the next entry.
+
+### 2026-10-14: Generic element-array transducer
+
+A new transducer family for arrays defined entirely by a file, including arrays with elements on several sides of the target. Each element is voxelised into the grid as its own stress source, following DomeTx's approach. The differences from DomeTx:
+- each element's complex drive sets both its amplitude and its phase;
+- the element footprint is normalised by voxel count;
+- the domain is a box around all elements on every side of the focus;
+- sensors cover the whole interior;
+- there is no Rayleigh pre-step, built-in steering or refocusing, because the drive file carries them;
+- the source ramps up over 4 cycles, as BabelBrain's other families do.
+
+The definition-file format (`element_array_v1`) is documented in the module docstring.
+- added `TranscranialModeling/BabelIntegrationELEMENT_ARRAY.py`
+- modified `TranscranialModeling/BabelIntegrationBASE.py`: in `UpdateConditions` with `DomeType=True`, a subclass may define `DomeRegionMap(xfield, yfield, zfield)` returning normalised coordinates and the region that must fit in the domain. Without it, the existing hemisphere is used unchanged.
+- modified `BabelBrain/CalculateFieldProcess.py`: `TxSystem == 'ElementArray'` imports the new module; `kargs` must include `ElementArrayFile`.
+- Tested locally on the CPU through `RUN_SIM.RunCases`, in water at PPW 3, with two opposing 8×8 panels of 2.4 mm square elements on a 30 mm sphere. The domain grew on both sides; all 128 elements got their own source voxels; the pressure peak landed on the target voxel. GPU runs follow on MSI.
+- modified `ANTIPHON_CHANGELOG.md`: table rows and this entry.

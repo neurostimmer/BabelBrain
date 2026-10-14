@@ -33,6 +33,8 @@ Upstream base: `upstream/main` at `29b1026` (7 Oct 2026).
 | `BabelBrain/CalculateFieldProcess.py` | modified | 2026-10-14 | Dispatch entry for `TxSystem == 'ElementArray'` |
 | `OfflineBatchExamples/ElementArray/run_element_array.py` | added | 2026-10-14 | Headless driver for ElementArray: water or step-1 mask; writes field metrics (peak, half-max zone, envelope, calibration scale) |
 | `containers/run_element_array.sbatch` | added | 2026-10-14 | Slurm GPU job running the driver in the container |
+| `OfflineBatchExamples/ElementArray/run_step1.py` | added | 2026-10-14 | Headless BabelBrain step 1 exactly as the GUI runs it (grid step, isotropic T1, default advanced options, CalculateMaskProcess); box FOV option |
+| `containers/run_head_element_array.sbatch` | added | 2026-10-14 | Slurm GPU job: step 1 then step 2 (CT path) for an element array; 3 h, 96 GB |
 
 ## Log
 
@@ -126,3 +128,16 @@ The definition-file format (`element_array_v1`) is documented in the module docs
     - the envelope at points `--face-offsets-mm` in front of each element face.
   - Tested locally on the CPU (synthetic panels).
 - modified `ANTIPHON_CHANGELOG.md`: this entry.
+
+### 2026-10-14: Headless step 1 and the head job
+
+- added `OfflineBatchExamples/ElementArray/run_step1.py`: BabelBrain's step 1 without the GUI, mirroring BabelBrain.py's mask worker:
+  - grid step = round(smallest SOS incl. shear / f / PPW, 3) mm;
+  - the T1 resampled to 1 mm isotropic, with `save_T1W_iso` copied verbatim from BabelBrain.py to avoid importing the Qt GUI;
+  - the Options.py advanced defaults;
+  - `CalculateMaskProcess` in a worker process.
+  - Our only choices: `--box-fov` (BabelBrain's `bApplyBOXFOV`, centred on the target and aligned with the trajectory) and the CT inputs.
+  - Outputs carry the GUI's prefix `<ID>_<Tx>_<f>kHz_<PPW>PPW_`.
+  - Note: step 1 writes meshes into the m2m folder, so point it at a copy.
+- added `containers/run_head_element_array.sbatch`: step 1 (optional), then step 2 on the step-1 mask (`--use-ct`). The time limit is 3 h, as required for head runs.
+- modified `ANTIPHON_CHANGELOG.md`: table rows and this entry.

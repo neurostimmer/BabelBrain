@@ -9,8 +9,8 @@ From: nvidia/cuda:12.9.1-base-ubuntu22.04
 #   apptainer build --fakeroot babelbrain_env.sif babelbrain.def
 #
 # CUDA 12.9 user-space libraries; needs an NVIDIA driver >= 575 (agate: 580.x).
-# Python 3.11 + pinned wheels from requirements.lock.txt (basis: upstream
-# environment_linux_cuda_13_driver_580.yml on branch UserTxServerMode).
+# Python 3.12 + pinned wheels from requirements.lock.txt (basis: upstream main
+# environment_win-314.yml, NumPy 2.3.5 + CuPy 13.6.0; see requirements.in).
 
 %files
     requirements.in        /opt/bb/env/requirements.in
@@ -25,10 +25,10 @@ From: nvidia/cuda:12.9.1-base-ubuntu22.04
     org.opencontainers.image.source https://github.com/neurostimmer/BabelBrain
     bb.base nvidia/cuda:12.9.1-base-ubuntu22.04
     bb.cuda 12.9
-    bb.python 3.11
+    bb.python 3.12
     bb.babelviscofdtd 1.2.7
-    bb.env_basis upstream UserTxServerMode@f973f5d environment_linux_cuda_13_driver_580.yml
-    bb.env_basis_sha256 c83852477c3ac41470d663cecb914847037bbe3984df5393b47fee58236b6e2b
+    bb.env_basis upstream main@29b1026 environment_win-314.yml (+ PySide6 6.9.3 from environment_mac_*-314.yml)
+    bb.env_basis_sha256 b759d71aa8c45b6084f8999e07a65e85a53d79304c93219399c29785a6f2281f
 
 %environment
     export LC_ALL=C.UTF-8 LANG=C.UTF-8
@@ -73,13 +73,13 @@ From: nvidia/cuda:12.9.1-base-ubuntu22.04
     mkdir -p /etc/OpenCL/vendors
     echo libnvidia-opencl.so.1 > /etc/OpenCL/vendors/nvidia.icd
 
-    # Python 3.11 (python-build-standalone via uv) and the locked wheel set.
+    # Python 3.12 (python-build-standalone via uv) and the locked wheel set.
     export UV_INSTALL_DIR=/opt/uv/bin UV_NO_MODIFY_PATH=1
     curl -LsSf https://astral.sh/uv/0.11.21/install.sh | sh
     export PATH=/opt/uv/bin:$PATH
     export UV_PYTHON_INSTALL_DIR=/opt/python UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy
-    uv python install 3.11.14 || uv python install 3.11
-    uv venv --python 3.11 /opt/bb/venv
+    uv python install 3.12.13 || uv python install 3.12
+    uv venv --python 3.12 /opt/bb/venv
     uv pip install --python /opt/bb/venv/bin/python --no-build --require-hashes \
         -r /opt/bb/env/requirements.lock.txt
     rm -rf /tmp/uv-cache

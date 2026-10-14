@@ -17,7 +17,7 @@ Upstream base: `upstream/main` at `29b1026` (7 Oct 2026).
 | `.gitignore` | modified | 2026-10-13 | Ignore local Claude Code files: `.claude/` and `CLAUDE.local.md` |
 | `ANTIPHON_CHANGELOG.md` | added | 2026-10-13 | This changelog |
 | `containers/README.md` | added | 2026-10-13 | Recipe: build and run the MSI Apptainer image; switch code refs without rebuild |
-| `containers/babelbrain.def` | added | 2026-10-13 | Apptainer definition: CUDA 12.9, Python 3.11, BabelViscoFDTD 1.2.7; no repo code baked in |
+| `containers/babelbrain.def` | added | 2026-10-13 | Apptainer definition: CUDA 12.9, Python 3.12, BabelViscoFDTD 1.2.7; no repo code baked in |
 | `containers/bb-entry.sh` | added | 2026-10-13 | Container entrypoint: headless env, provenance, dependency check, THP disabled by default |
 | `containers/bb-run.sh` | added | 2026-10-13 | Wrapper: fetch the fork and run at BB_REF (branch/tag/SHA) or BB_SRC |
 | `containers/build.sbatch` | added | 2026-10-13 | Slurm CPU job that builds the image |
@@ -25,7 +25,7 @@ Upstream base: `upstream/main` at `29b1026` (7 Oct 2026).
 | `containers/depcheck.py` | added | 2026-10-13 | Flags when a ref needs dependencies the image lacks |
 | `containers/deps_allow.txt` | added | 2026-10-13 | Allow-list for depcheck.py |
 | `containers/requirements.in` | added | 2026-10-13 | Top-level container dependencies |
-| `containers/requirements.lock.txt` | added | 2026-10-13 | Hash-pinned container dependency lock (cp311 manylinux) |
+| `containers/requirements.lock.txt` | added | 2026-10-13 | Hash-pinned container dependency lock (cp312 manylinux) |
 | `containers/smoke_test.py` | added | 2026-10-13 | GPU smoke test: imports, CUDA backend, tiny water FDTD |
 | `containers/smoke_test.sbatch` | added | 2026-10-13 | Slurm GPU job for the smoke test |
 
@@ -63,3 +63,18 @@ Agate nodes run transparent hugepages `always` (defrag `madvise`) and hold a lar
   - `BB_THP_DISABLE=0` opts out.
   - Tested locally: with it on, the command sees `THP_enabled: 0`; with it off, it sees 1.
 - modified `ANTIPHON_CHANGELOG.md`: updated the table row and added this entry.
+
+### 2026-10-14: MSI image on Python 3.12; smoke-test fixes
+
+The first image's GPU smoke test (MSI job 3604094) failed for all three refs. One failure was real: upstream `main` uses Python 3.12 f-string syntax, so Python 3.11 can't import `BabelBrain.py` or `CalculateTemperatureEffects.py`. The other three were bugs in the smoke test itself; the image's CUDA works.
+- modified `containers/requirements.in`, `containers/requirements.lock.txt`: Python 3.12, pinned to upstream main's `environment_win-314.yml` (NumPy 2.3.5, CuPy 13.6.0, SciPy 1.17.1, pandas 3.0.2, VTK 9.6.1) plus PySide6 6.9.3 from `environment_mac_*-314.yml`. BabelViscoFDTD stays at 1.2.7. 83 packages, all cp312 manylinux wheels. Not 3.14: CuPy 13.6.0 has wheels for cp39-cp313 only.
+- modified `containers/babelbrain.def`: Python 3.12.13; labels for the new basis, including `bb.env_basis_sha256`.
+- modified `containers/depcheck.py`: compares against `environment_win-314.yml` first, then the older files. It now compares any conda pin that names an installed package, and `deps_allow.txt` can excuse the Python version.
+- modified `containers/deps_allow.txt`: Python 3.12 vs 3.14; BabelViscoFDTD 1.2.7 vs main's 1.2.6 and 1.2.4.
+- modified `containers/smoke_test.py`, fixing three test bugs:
+  - CuPy: a raw NVRTC kernel checked exactly, plus a float64 sum, instead of an exact float32 sum comparison.
+  - BabelViscoFDTD backends: read from the module's attributes, because import messages print only once.
+  - Water case: sensors every 2 voxels (80° per step). At 6 voxels (240°), `np.unwrap` folded the phase and reported 2987.6 m/s. The fixed case measures 1503.1 m/s on the local CPU.
+- modified `containers/README.md`: versions, basis, and depcheck behaviour.
+- modified `ANTIPHON_CHANGELOG.md`: table rows and this entry.
+- The rebuild (MSI job 3668317) and smoke test (3668318) are queued; results go in the next entry.

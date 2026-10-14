@@ -3,9 +3,10 @@
 
 Code is not baked into the image, so a branch that changes its dependencies would silently
 run against the wrong environment. This reads the checkout's
-environment_linux_cuda_13_driver_580.yml (falls back to environment_linux.yml), takes its
-pip pins plus the conda pins that have a PyPI equivalent here, and compares them with the
-installed distributions. Known, deliberate differences are listed in
+environment_win-314.yml, the image's basis, which only upstream main has so far. Otherwise it
+falls back to environment_linux_cuda_13_driver_580.yml, then environment_linux.yml. It takes
+the file's pip pins plus every conda pin whose name is an installed distribution here (or is
+mapped in CONDA_MAP), and compares them with the installed distributions. Known, deliberate differences are listed in
 /opt/bb/env/deps_allow.txt (from deps_allow.txt in the recipe).
 
 Exit 0: everything matches or is a known difference. Exit 1: a pin differs or a package is
@@ -19,8 +20,9 @@ import platform
 import re
 import sys
 
-ENV_FILES = ["environment_linux_cuda_13_driver_580.yml", "environment_linux.yml"]
-# conda package name -> installed distribution name (conda-only packages are not compared)
+ENV_FILES = ["environment_win-314.yml", "environment_linux_cuda_13_driver_580.yml", "environment_linux.yml"]
+# conda package name -> installed distribution name, where they differ. Other conda pins are
+# compared when a distribution of the same name is installed; conda-only packages are skipped.
 CONDA_MAP = {"numpy": "numpy", "scipy": "scipy", "numba": "numba", "llvmlite": "llvmlite",
              "cupy": "cupy-cuda12x", "fastrlock": "fastrlock"}
 ALLOW_FILE = os.environ.get("BB_DEPS_ALLOW", "/opt/bb/env/deps_allow.txt")
@@ -30,7 +32,7 @@ def norm(name):
     return re.sub(r"[-_.]+", "-", name).lower()
 
 
-def parse_env(path):
+def parse_env(path, installed):
     """Return ({dist: (op, version)} for pip pins and mapped conda pins, python version or None)."""
     pins, py = {}, None
     pip_indent = None                       # indent of the "- pip:" line while inside its list
@@ -57,8 +59,10 @@ def parse_env(path):
             name = norm(parts[0])
             if name == "python" and len(parts) > 1:
                 py = parts[1]
-            elif name in CONDA_MAP and len(parts) > 1 and parts[1]:
-                pins.setdefault(norm(CONDA_MAP[name]), ("==", parts[1]))
+            elif len(parts) > 1 and parts[1]:
+                dist = norm(CONDA_MAP.get(name, name))
+                if name in CONDA_MAP or dist in installed:
+                    pins.setdefault(dist, ("==", parts[1]))
     return pins, py
 
 
@@ -97,8 +101,8 @@ def main():
             basis = json.load(open("/.singularity.d/labels.json")).get("bb.env_basis_sha256", "")
         except Exception:
             basis = ""
-    pins, py = parse_env(env)
     installed = {norm(d.metadata["Name"]): d.version for d in md.distributions()}
+    pins, py = parse_env(env, installed)
     allow = load_allow()
     ok, known, bad = 0, [], []
     for name, (op, ver) in sorted(pins.items()):
@@ -113,7 +117,8 @@ def main():
         (known if name in allow else bad).append(msg + (f"  [known: {allow[name]}]" if name in allow else ""))
     pyv = platform.python_version()
     if py and not pyv.startswith(".".join(py.split(".")[:2])):
-        bad.append(f"python={py}: image has {pyv}")
+        msg = f"python={py}: image has {pyv}"
+        (known if "python" in allow else bad).append(msg + (f"  [known: {allow['python']}]" if "python" in allow else ""))
     rel = os.path.basename(env)
     same = "same as" if sha == basis else "DIFFERS from"
     print(f"[depcheck] {rel} sha256 {sha[:12]} ({same} the image's basis {basis[:12] or '?'}); "

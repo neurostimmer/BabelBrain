@@ -1,4 +1,5 @@
 # Known, deliberate differences between a BabelBrain ref's pinned environment and this image.
 # One distribution name per line, then the reason. Read by depcheck.py (baked into the image
 # at build time; set BB_DEPS_ALLOW=<path> to use an edited copy without rebuilding).
-babelviscofdtd 1.2.7 installed; upstream main pins 1.2.4, UserTx/UserTxServerMode/dualTx pin 1.2.7 (1.2.5-1.2.7: wheel packaging, BHTE matrix prep, exact GPU selection by name)
+python 3.12 in the image; upstream's environment_win-314.yml uses 3.14, but CuPy 13.6.0 has no Python 3.14 wheels on PyPI
+babelviscofdtd 1.2.7 installed; upstream main's environment_win-314.yml pins 1.2.6 and environment_linux.yml 1.2.4; UserTx/UserTxServerMode/dualTx pin 1.2.7 (1.2.5-1.2.7: wheel packaging, BHTE matrix prep, exact GPU selection by name)

@@ -8,7 +8,7 @@ This is an environment-only Apptainer image for running BabelBrain without a dis
 
 | File | Role |
 |---|---|
-| `babelbrain.def` | Apptainer definition: `nvidia/cuda:12.9.1-base-ubuntu22.04`, CUDA 12.9 libraries, Mesa/Qt/X client libraries, Python 3.11 venv from `requirements.lock.txt` |
+| `babelbrain.def` | Apptainer definition: `nvidia/cuda:12.9.1-base-ubuntu22.04`, CUDA 12.9 libraries, Mesa/Qt/X client libraries, Python 3.12 venv from `requirements.lock.txt` |
 | `requirements.in` / `requirements.lock.txt` | Pins: the upstream env file mapped to PyPI wheels; the lock is hash-pinned, wheels only |
 | `deps_allow.txt` | Known, deliberate differences from a ref's own env file (read by `depcheck.py`) |
 | `bb-entry.sh` | In-image entrypoint (`/opt/bb/bin/bb-entry`, the `%runscript`). See below. |
@@ -30,30 +30,29 @@ This is an environment-only Apptainer image for running BabelBrain without a dis
 | | Image | Notes |
 |---|---|---|
 | CUDA | 12.9 (cudart, NVRTC, cuBLAS, cuFFT, cuRAND, cuSOLVER, cuSPARSE, CCCL, headers) | Needs driver ≥ 575. Agate's A100 nodes run 580.x (CUDA ≤ 13.0). |
-| Python | 3.11 (python-build-standalone via uv; 3.11.14 requested, as upstream) | |
+| Python | 3.12 (python-build-standalone via uv; 3.12.13 requested) | Upstream `main` uses Python 3.12 f-string syntax, which 3.11 can't parse |
 | BabelViscoFDTD | 1.2.7 | |
-| CuPy | 13.6.0 (`cupy-cuda12x`) | Same release as upstream's CUDA 13 env |
-| NumPy / SciPy / PySide6 / VTK | 1.26.4 / 1.16.3 / 6.4.3 / 9.5.2 | Upstream pins |
+| CuPy | 13.6.0 (`cupy-cuda12x`) | Same release as upstream's CUDA environments |
+| NumPy / SciPy / pandas / PySide6 / VTK | 2.3.5 / 1.17.1 / 3.0.2 / 6.9.3 / 9.6.1 | Upstream `main` pins |
 
-**Basis.** The basis is upstream `environment_linux_cuda_13_driver_580.yml` on branch `UserTxServerMode` @ `f973f5d` (sha256 `c838524…`). That file is identical on `UserTx`. Its pip section is used verbatim. Its conda packages map to PyPI wheels:
+**Basis.** The basis is upstream `environment_win-314.yml` on `main` @ `29b1026` (sha256 `b759d71…`). It is upstream's CUDA environment for current Python, and the only upstream file that pairs NumPy 2 with CuPy. PySide6 6.9.3 comes from upstream's `environment_mac_*-314.yml`, since the Windows file doesn't pin it. Every package that file pins is pinned to the same version here, as a PyPI wheel; the rest resolve to versions compatible with those pins.
 
-- numpy, scipy, numba, llvmlite, fastrlock and cupy;
-- CUDA comes from the NVIDIA apt repo in the base image.
+The first image (13 Oct 2026) was built on Python 3.11 from `environment_linux_cuda_13_driver_580.yml` on `UserTxServerMode`. It couldn't import upstream `main` (`BabelBrain.py:555`, `CalculateTemperatureEffects.py:1202`), which led to this change.
 
 **Deliberate differences**, also marked `DIFF` in `requirements.in`:
 
-- **CUDA 12.9 instead of conda CUDA 13.1.**
-  - Driver 580 officially supports CUDA ≤ 13.0, while upstream's file name ("driver_580") relies on minor-version compatibility.
-  - CuPy 14, which can use pip-installed CUDA, needs NumPy 2, which upstream's pins exclude.
+- **Python 3.12, not 3.14.** CuPy 13.6.0 has PyPI wheels for cp39-cp313 only. `deps_allow.txt` lists this, so `depcheck.py` reports it as known.
+- **CUDA 12.9 wheels (`cupy-cuda12x`) and apt libraries,** not conda's CUDA build. Agate's driver 580 supports CUDA ≤ 13.0.
+- **BabelViscoFDTD 1.2.7, not 1.2.6** (see below).
 - **No MKL / `mkl_fft`.** BabelBrain falls back to `numpy.fft` (`try: import mkl_fft`).
-- **Added:** `jinja2`, which `UserTx*` imports in `CreateTransducers/transducer_creator.py` but no env file lists; `xmltodict`, which the non-CUDA Linux file lists; `pytest` and `pytest-html`.
+- **Added:** `jinja2`, which `UserTx*` imports in `CreateTransducers/transducer_creator.py` but no env file lists; `pyvistaqt`, `numpy-stl`, `pywavelets`, `requests` and `certifi`, which BabelBrain imports.
 
-**BabelViscoFDTD 1.2.7 vs 1.2.4:**
+**BabelViscoFDTD 1.2.7:**
 
-- Upstream `main` pins 1.2.4. `UserTx`, `UserTxServerMode` and `dualTx` pin 1.2.7.
-- 1.2.4 has no Linux wheels (sdist only). 1.2.7 has cp39-cp314 manylinux wheels.
-- The 1.2.5-1.2.7 changes are wheel packaging, macOS build fixes, BHTE (thermal) matrix preparation, and choosing the exact GPU by full name. No FDTD solver changes are listed.
-- The Antiphon elastic MSI environment also uses 1.2.7, on Python 3.12 + CuPy 14. This image uses Python 3.11, where `distutils` still exists, so the 3.12 import workaround is not needed.
+- Upstream `main` pins 1.2.6 (`environment_win-314.yml`) and 1.2.4 (`environment_linux.yml`). `UserTx`, `UserTxServerMode` and `dualTx` pin 1.2.7.
+- 1.2.7 has cp39-cp314 manylinux wheels. The 1.2.5-1.2.7 changes are wheel packaging, macOS build fixes, BHTE (thermal) matrix preparation, and choosing the exact GPU by full name. No FDTD solver changes are listed.
+- Its backends import `distutils`, which Python 3.12 removed; `setuptools<81` in the lock provides the shim.
+- The Antiphon elastic MSI environment also uses 1.2.7 on Python 3.12.
 
 ## Upstream branches covered
 
@@ -136,18 +135,15 @@ sbatch -A "$BB_ACCOUNT" -o "$BB_SCRATCH/logs/%x_%j.out" --export=ALL,BB_REFS="ma
 Code is fetched at run time, but dependencies are baked into the image. A ref that changes its env file therefore needs a rebuild. Each run detects this as follows:
 
 1. The image labels record `bb.env_basis_sha256` (the upstream env file the image was derived from), `bb.requirements_in_sha256` and `bb.requirements_lock_sha256`. To read them, run `apptainer inspect --labels <sif>` or `./bb-run.sh info`.
-2. Before every command, `depcheck.py` reads the checked-out ref's `environment_linux_cuda_13_driver_580.yml`. It reports whether the file's hash equals the image's basis, then compares every pip pin and the mapped conda pins with the installed versions:
-
-   ```
-   [depcheck] environment_linux_cuda_13_driver_580.yml sha256 d0d1aa51e019 (DIFFERS from the image's basis c83852477c3a); 66 pins match, 1 known differences, 0 unexpected
-   ```
+2. Before every command, `depcheck.py` reads the checked-out ref's `environment_win-314.yml`, the image's basis. On refs without it, it falls back to `environment_linux_cuda_13_driver_580.yml`, then `environment_linux.yml`. It reports whether the file's hash equals the image's basis, then compares every pip pin, and every conda pin that names an installed package, with the installed versions. It prints one summary line, `[depcheck] <file> sha256 <12 hex> (same as|DIFFERS from the image's basis <12 hex>); <n> pins match, <n> known differences, <n> unexpected`, then one line per difference.
+   - The `UserTx`, `UserTxServerMode` and `dualTx` branches have no `environment_win-314.yml`. Their fallback file is the older Python 3.11 / NumPy 1.26 set, so depcheck lists many mismatches there. They imported and ran on the first, Python 3.11 image; the smoke test checks them on each new build. Use the default `BB_DEPCHECK=warn` for them, not `strict`.
 
 3. An unexpected mismatch prints `MISMATCH` lines. With `BB_DEPCHECK=strict` it also stops the run (exit 3), which is the recommended setting for production batches.
 
 When it fires, do this:
 
 1. Update `requirements.in`.
-2. Regenerate the lock with `uv pip compile requirements.in --python-version 3.11 --python-platform x86_64-manylinux_2_28 --no-build --generate-hashes -o requirements.lock.txt`. This reads metadata only and runs anywhere.
+2. Regenerate the lock with `uv pip compile requirements.in --python-version 3.12 --python-platform x86_64-manylinux_2_28 --no-build --generate-hashes -o requirements.lock.txt`. This reads metadata only and runs anywhere.
 3. Rebuild, then update the `bb.env_basis*` labels in `babelbrain.def` if the basis moved.
 
 Use `deps_allow.txt` for differences you accept deliberately.
@@ -161,4 +157,4 @@ Use `deps_allow.txt` for differences you accept deliberately.
 | `FAIL: no outbound internet` in the build | Ask the site how to build images: a different partition, a proxy, or building elsewhere and copying the `.sif`. |
 | `[depcheck] MISMATCH` | See "Dependency changes". |
 | CuPy `CUDA driver version is insufficient` | You landed on an old-driver node. Use `--constraint="a100\|h100"`. |
-| Qt `could not load the Qt platform plugin` | Missing X/GL client library. Run `apptainer exec <sif> bash -c 'ldd /opt/bb/venv/lib/python3.11/site-packages/PySide6/Qt/plugins/platforms/*.so \| grep "not found"'` and add the package to `%post`. |
+| Qt `could not load the Qt platform plugin` | Missing X/GL client library. Run `apptainer exec <sif> bash -c 'ldd /opt/bb/venv/lib/python3.12/site-packages/PySide6/Qt/plugins/platforms/*.so \| grep "not found"'` and add the package to `%post`. |

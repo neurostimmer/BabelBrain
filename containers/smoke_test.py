@@ -102,9 +102,18 @@ try:
     info("nvrtc", f"{nvrtc[0]}.{nvrtc[1]}")
     free, total = cp.cuda.runtime.memGetInfo()
     info("gpu0_memory_free_total_GB", [round(free / 1e9, 1), round(total / 1e9, 1)])
-    x = cp.arange(1 << 20, dtype=cp.float32)
-    check("cupy kernel (NVRTC compile + run)", float(cp.sum(x * 2)) == float(np.sum(np.arange(1 << 20, dtype=np.float32) * 2)),
-          f"{n} device(s): {', '.join(names)}")
+    # A raw kernel forces an NVRTC compile. Compare with a tolerance: a float32 reduction on the
+    # GPU adds in a different order from NumPy, so its last bits legitimately differ.
+    k = cp.RawKernel(r'''extern "C" __global__ void axpb(const float* x, float* y, int n) {
+        int i = blockDim.x * blockIdx.x + threadIdx.x; if (i < n) y[i] = 2.0f * x[i] + 1.0f; }''', "axpb")
+    nel = 1 << 20
+    x = cp.arange(nel, dtype=cp.float32)
+    y = cp.empty_like(x)
+    k(((nel + 255) // 256,), (256,), (x, y, cp.int32(nel)))
+    exact = bool((cp.asnumpy(y) == 2 * np.arange(nel, dtype=np.float32) + 1).all())
+    total = float(cp.sum(x * 2, dtype=cp.float64))
+    check("cupy kernel (NVRTC compile + run)", exact and np.isclose(total, nel * (nel - 1.0), rtol=1e-12),
+          f"{n} device(s): {', '.join(names)}; raw kernel exact: {exact}; float64 sum {total:.6e}")
 except Exception as e:  # noqa: BLE001
     check("cupy CUDA", False, f"{type(e).__name__}: {e}")
 
@@ -115,8 +124,11 @@ try:
 except Exception as e:  # noqa: BLE001
     check("OpenCL devices", False, f"{type(e).__name__}: {e}", fatal=False)
 
-_, txt = quiet(importlib.import_module, "BabelViscoFDTD.PropagationModel")
-loaded = [ln.split()[0] for ln in txt.splitlines() if ln.strip().endswith(" loaded") and "NOT" not in ln]
+# PropagationModel prints which backends it loaded only on first import, and earlier sections
+# may already have imported it, so read the module's attributes instead of its messages.
+pm, txt = quiet(importlib.import_module, "BabelViscoFDTD.PropagationModel")
+loaded = [b for b in ("StaggeredFDTD_3D_CPU", "StaggeredFDTD_3D_CUDA", "StaggeredFDTD_3D_OPENCL",
+                      "StaggeredFDTD_3D_METAL", "StaggeredFDTD_3D_MLX") if hasattr(pm, b)]
 info("BabelViscoFDTD backends loaded", loaded)
 check("BabelViscoFDTD CUDA backend", "StaggeredFDTD_3D_CUDA" in loaded, txt.strip().replace("\n", "; "))
 
@@ -172,7 +184,10 @@ def water_case(backend, backend_id, dev_name):
     c = N // 2
     smap = np.zeros((N, N, N), np.uint32); smap[c, c, c] = 1
     ox = np.zeros((N, N, N), np.float32); ox[c, c, c] = 1.0
-    offs = [8, 14, 20, 26]                     # sensors on +x, in voxels from the source
+    # Sensors on +x, in voxels from the source. At 9 points per wavelength, 2 voxels is an 80 deg
+    # phase step, safely under the 180 deg np.unwrap can resolve. (A 6-voxel spacing is 240 deg,
+    # which unwraps to -120 deg and halves the fitted slope, doubling the apparent phase speed.)
+    offs = list(range(8, 27, 2))
     sens = np.zeros((N, N, N), np.uint32)
     for o in offs:
         sens[c + o, c, c] = 1

@@ -113,3 +113,16 @@ The definition-file format (`element_array_v1`) is documented in the module docs
 
 - modified `OfflineBatchExamples/ElementArray/run_element_array.py`: the envelope moving-average window is now odd. An even window shifts the envelope by half a voxel; on the first MSI water run that read as a 0.141 mm axial offset that wasn't in the field, whose raw half-max centroid was exactly on the target.
 - modified `ANTIPHON_CHANGELOG.md`: this entry.
+
+### 2026-10-14: Off-target analysis and box water mask in the ElementArray driver
+
+- modified `OfflineBatchExamples/ElementArray/run_element_array.py`:
+  - `--water-mask-mm` takes one value (a cube) or three (a box).
+  - `--offtarget` adds field-derived off-target metrics in the Tx frame:
+    - focal = max |p| within `--focal-radius-mm` of the target;
+    - envelope = an odd max filter at least one standing-wave fringe wide;
+    - main lobe = connected envelope ≥ 0.5 focal containing the target, with extents per axis;
+    - off-target = max |p| outside the main lobe dilated by `--main-dilate-mm`, inside `--region-half-mm` along `--region-axis`;
+    - the envelope at points `--face-offsets-mm` in front of each element face.
+  - Tested locally on the CPU (synthetic panels).
+- modified `ANTIPHON_CHANGELOG.md`: this entry.

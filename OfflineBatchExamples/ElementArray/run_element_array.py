@@ -55,6 +55,49 @@ def vox_to_tx(D, ijk, shape):
                            np.interp(kz, np.arange(zs.size), zs)])
 
 
+def offtarget_metrics(D, p, tgt, hs, f0, ea, args):
+    """Off-target analysis in the Tx frame (see --offtarget)."""
+    from scipy import ndimage
+    xs, ys, zs = (1e3 * np.asarray(D[v], float) for v in ("x_vec", "y_vec", "z_vec"))
+    zs_saved = zs[::-1]                                   # saved volumes are flipped along z
+    X, Y, Z = np.meshgrid(xs, ys, zs_saved, indexing="ij", sparse=True)
+    d = np.sqrt(X ** 2 + Y ** 2 + Z ** 2)
+    focal = float(p[d <= args.focal_radius_mm].max())
+    fringe = 1500.0 / f0 / 2                              # standing-wave fringe period in water (m)
+    size = 2 * int(np.ceil(fringe / hs / 2)) + 1          # odd, at least one fringe
+    env = ndimage.maximum_filter(p, size=size)
+    lab, _ = ndimage.label(env >= 0.5 * focal)
+    main = lab == lab[tuple(tgt)]
+    excl = ndimage.binary_dilation(main, iterations=int(round(args.main_dilate_mm / (hs * 1e3))))
+    region = np.ones(p.shape, bool)
+    if args.region_half_mm:
+        coord = {"x": X, "y": Y, "z": Z}[args.region_axis]
+        region = np.broadcast_to(np.abs(coord) <= args.region_half_mm, p.shape)
+    off = np.where(excl | ~region, 0, p)
+    oi = np.unravel_index(off.argmax(), p.shape)
+    ext = []
+    for ax, v in enumerate((xs, ys, zs_saved)):
+        other = tuple(j for j in range(3) if j != ax)
+        sel = v[np.any(main, axis=other)]
+        ext.append([float(sel.min()), float(sel.max())])
+    out = dict(ot_focal=focal, ot_envelope_maxfilter_voxels=size, ot_offtarget_max=float(off.max() / focal),
+               ot_offtarget_loc_tx_mm=[float(xs[oi[0]]), float(ys[oi[1]]), float(zs_saved[oi[2]])],
+               ot_main_lobe_extent_tx_mm=ext, ot_main_lobe_voxels=int(main.sum()),
+               ot_saved_extent_tx_mm=[[float(v.min()), float(v.max())] for v in (xs, ys, zs_saved)])
+    faces = {}
+    for dd in args.face_offsets_mm:
+        pts = (ea["centers_m"] + dd * 1e-3 * ea["normals"]) * 1e3
+        ii = [(int(np.argmin(np.abs(xs - q[0]))), int(np.argmin(np.abs(ys - q[1]))),
+               int(np.argmin(np.abs(zs_saved - q[2])))) for q in pts]
+        inside = [all(lo - hs * 1e3 <= c <= hi + hs * 1e3 for c, (lo, hi) in zip(q, out["ot_saved_extent_tx_mm"]))
+                  for q in pts]
+        vals = np.array([env[i] for i, ok in zip(ii, inside) if ok]) / focal
+        faces[f"{dd:g}mm"] = dict(max=float(vals.max()) if vals.size else None,
+                                  mean=float(vals.mean()) if vals.size else None, n_inside=int(sum(inside)))
+    out["ot_face_offset_envelope"] = faces
+    return out
+
+
 def half_max_zone(p, peak, h):
     from scipy import ndimage
     lab, _ = ndimage.label(p >= 0.5 * p[tuple(peak)])
@@ -68,12 +111,24 @@ def main():
     ap.add_argument("--array", required=True)
     ap.add_argument("--out", required=True)
     g = ap.add_mutually_exclusive_group(required=True)
-    g.add_argument("--water-mask-mm", type=float)
+    g.add_argument("--water-mask-mm", type=float, nargs="+",
+                   help="water-only case: mask size in mm, one value (cube) or three (x y z, Tx frame)")
     g.add_argument("--mask")
     ap.add_argument("--use-ct", action="store_true", help="head run on step-1 CT outputs (CT/pseudo-CT path)")
     ap.add_argument("--ppw", type=int, default=None, help="default: BabelBrain's GUI default for the frequency")
     ap.add_argument("--backend", choices=["cuda", "opencl", "cpu"], default="cuda")
     ap.add_argument("--calibrate-pa", type=float, default=None)
+    ap.add_argument("--offtarget", action="store_true",
+                    help="off-target analysis: focal = max |p| within --focal-radius-mm of the target; envelope = "
+                         "max filter one standing-wave fringe wide; main lobe = connected envelope >= 0.5 focal "
+                         "containing the target, extents per axis; off-target = max |p| outside the main lobe "
+                         "dilated by --main-dilate-mm and inside --region-half-mm along --region-axis; and the "
+                         "envelope at points --face-offsets-mm in front of each element face")
+    ap.add_argument("--focal-radius-mm", type=float, default=1.0)
+    ap.add_argument("--main-dilate-mm", type=float, default=4.0)
+    ap.add_argument("--region-axis", choices=["x", "y", "z"], default="z")
+    ap.add_argument("--region-half-mm", type=float, default=None)
+    ap.add_argument("--face-offsets-mm", type=float, nargs="*", default=[])
     ap.add_argument("--envelope-axis", choices=["x", "y", "z"], default=None,
                     help="also report metrics on the standing-wave envelope along this Tx-frame axis: |p|^2 averaged "
                          "over a half-wavelength window (opposing elements make a standing wave along their axis)")
@@ -94,9 +149,13 @@ def main():
     os.makedirs(case_dir, exist_ok=True)
     tag = f"_{int(f0 / 1e3)}kHz_{ppw}PPW_"
     if args.water_mask_mm:
-        M = int(np.ceil(args.water_mask_mm * 1e-3 / h)) | 1
-        mask = np.zeros((M, M, M), np.uint8)
-        mask[M // 2, M // 2, M // 2] = 5
+        L = args.water_mask_mm * 3 if len(args.water_mask_mm) == 1 else args.water_mask_mm
+        if len(L) != 3:
+            raise SystemExit("--water-mask-mm takes one or three values")
+        # The mask's z axis is the simulation z flipped; a symmetric box makes that immaterial here.
+        Mx, My, Mz = (int(np.ceil(v * 1e-3 / h)) | 1 for v in L)
+        mask = np.zeros((Mx, My, Mz), np.uint8)
+        mask[Mx // 2, My // 2, Mz // 2] = 5
         target = "T"
         nibabel.Nifti1Image(mask, np.diag([h * 1e3] * 3 + [1.0])).to_filename(
             os.path.join(case_dir, target + tag + "BabelViscoInput.nii.gz"))
@@ -161,6 +220,8 @@ def main():
                  envelope_halfmax_centroid_tx_mm=vox_to_tx(D, ecen, p.shape).tolist(),
                  envelope_halfmax_zone_mm3=evol, envelope_halfmax_extent_mm=eext.tolist(),
                  envelope_target=float(env[tuple(tgt)]))
+    if args.offtarget:
+        m.update(offtarget_metrics(D, p, tgt, hs, f0, ea, args))
     if args.calibrate_pa:
         m["calibration_scale"] = args.calibrate_pa / m["p_target"]
     json.dump(m, open(os.path.join(args.out, "metrics.json"), "w"), indent=1)

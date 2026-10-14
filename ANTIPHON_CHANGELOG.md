@@ -108,3 +108,8 @@ The definition-file format (`element_array_v1`) is documented in the module docs
   - Tested locally on the CPU with a steered synthetic drive: the envelope half-maximum centroid landed at x = 1.99 mm for 2.0 mm requested.
 - added `containers/run_element_array.sbatch`: a GPU job (48 GB, 1 h by default) that runs the driver at `BB_REF` in the container.
 - modified `ANTIPHON_CHANGELOG.md`: table rows and this entry.
+
+### 2026-10-14: Centred envelope window in the ElementArray driver
+
+- modified `OfflineBatchExamples/ElementArray/run_element_array.py`: the envelope moving-average window is now odd. An even window shifts the envelope by half a voxel; on the first MSI water run that read as a 0.141 mm axial offset that wasn't in the field, whose raw half-max centroid was exactly on the target.
+- modified `ANTIPHON_CHANGELOG.md`: this entry.

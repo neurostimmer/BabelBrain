@@ -151,7 +151,8 @@ def main():
     if args.envelope_axis:
         from scipy.ndimage import uniform_filter1d
         ax = "xyz".index(args.envelope_axis)
-        win = max(1, int(round(1500.0 / f0 / 2 / hs)))
+        # Odd window, so the moving average is centred (an even window shifts the envelope by half a voxel).
+        win = 2 * int(round(1500.0 / f0 / 2 / hs / 2)) + 1
         env = np.sqrt(uniform_filter1d(p ** 2, size=win, axis=ax, mode="nearest"))
         epk = np.array(np.unravel_index(np.argmax(env), env.shape))
         _, ecen, evol, eext = half_max_zone(env, epk, hs)

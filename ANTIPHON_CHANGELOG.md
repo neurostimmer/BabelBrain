@@ -35,6 +35,9 @@ Upstream base: `upstream/main` at `29b1026` (7 Oct 2026).
 | `containers/run_element_array.sbatch` | added | 2026-10-14 | Slurm GPU job running the driver in the container |
 | `OfflineBatchExamples/ElementArray/run_step1.py` | added | 2026-10-14 | Headless BabelBrain step 1 exactly as the GUI runs it (grid step, isotropic T1, default advanced options, CalculateMaskProcess); box FOV option |
 | `containers/run_head_element_array.sbatch` | added | 2026-10-14 | Slurm GPU job: step 1 then step 2 (CT path) for an element array; 3 h, 96 GB |
+| `OfflineBatchExamples/ElementArray/run_thermal.py` | added | 2026-10-14 | Headless BabelBrain step 3 (thermal) on a step-2 head result: GUI arguments and defaults; as-sent intensity mode; temperature, rise and CEM43 per tissue |
+| `containers/run_step1.sbatch` | added | 2026-10-14 | Slurm GPU job: BabelBrain step 1 only, so one head model serves many step-2 runs |
+| `containers/run_thermal.sbatch` | added | 2026-10-14 | Slurm GPU job: BabelBrain step 3 (thermal) on a step-2 head result |
 
 ## Log
 
@@ -140,4 +143,18 @@ The definition-file format (`element_array_v1`) is documented in the module docs
   - Outputs carry the GUI's prefix `<ID>_<Tx>_<f>kHz_<PPW>PPW_`.
   - Note: step 1 writes meshes into the m2m folder, so point it at a copy.
 - added `containers/run_head_element_array.sbatch`: step 1 (optional), then step 2 on the step-1 mask (`--use-ct`). The time limit is 3 h, as required for head runs.
+- modified `ANTIPHON_CHANGELOG.md`: table rows and this entry.
+
+### 2026-10-14: Chunked head pipeline (step 1, step 2, step 3 as separate jobs) and a headless thermal step
+
+One head model can now be built once and reused by any number of acoustic runs, and each acoustic run can be followed by BabelBrain's thermal step. All three run without the GUI.
+- modified `OfflineBatchExamples/ElementArray/run_element_array.py`: a head run is followed by a water-only run on the same mask, as BabelBrain's own step 2 (`CalculateFieldProcess`) does. Step 3 reads it next to the head result (`<...>Water_DataForSim.h5`). `metrics.json` adds the water run's peak, its value at the target and the head/water ratio there. `--no-water` skips it.
+- added `OfflineBatchExamples/ElementArray/run_thermal.py`: BabelBrain's step 3 without the GUI. It calls `CalculateThermalProcess` with the GUI's arguments (`Babel_Thermal.RunThermalSim`) and its defaults (baseline 37 C, 100 BHTE iterations per process), on a profile in BabelBrain's YAML format.
+  - `--isppa drive` (default) simulates the field as sent: it mirrors BabelBrain's normalisation (peak brain pressure, rho*c at the target), so BabelBrain reports `PressureRatio` = 1, which is checked. `--isppa profile` uses the profile's `BaseIsppa`, as the GUI does.
+  - `thermal_metrics.json`: peak temperature, rise and CEM43 in brain, skin and skull, plus the target, per timing entry.
+  - The target is read from `TempEndFUS` at `TargetLocation`. `TempProfileTarget` is not used: when the target is also the brain's hottest voxel only three points are monitored, and `IndTarget = 2` then selects the skull's trace.
+- modified `OfflineBatchExamples/ElementArray/run_step1.py`: the worker process is started with `spawn`. The parent queries the GPU first, and CUDA and PoCL don't survive a fork.
+- added `containers/run_step1.sbatch`: step 1 only.
+- added `containers/run_thermal.sbatch`: step 3 on a step-2 head result.
+- Tested locally on the CPU on a synthetic layered head (T1W-only labels, PPW 3, two 8x8 panels): head then water in 49 s; thermal in 9 s on PoCL, with `PressureRatio` exactly 1 in drive mode and the target rise below the brain peak. With `fork`, the thermal worker deadlocked at its first BHTE call.
 - modified `ANTIPHON_CHANGELOG.md`: table rows and this entry.

@@ -111,9 +111,12 @@ def main():
     from CalculateMaskProcess import CalculateMaskProcess
     backend = {"cuda": 1, "opencl": 2}[args.backend]
     dev = gpu_name(args.backend)
-    q = mp.Queue()
+    # A fresh interpreter for the worker: the device query above has initialised the GPU runtime in this process,
+    # and CUDA and PoCL don't survive a fork (the worker deadlocks or fails to initialise).
+    ctx = mp.get_context("spawn")
+    q = ctx.Queue()
     t0 = time.time()
-    p = mp.Process(target=CalculateMaskProcess, args=(q, backend, dev), kwargs=kargs)
+    p = ctx.Process(target=CalculateMaskProcess, args=(q, backend, dev), kwargs=kargs)
     p.start()
     log, outputs = [], None
     while p.is_alive() or not q.empty():

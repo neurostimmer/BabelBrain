@@ -5,11 +5,14 @@ Inputs: an `element_array_v1` definition file (see TranscranialModeling/BabelInt
 and either
   --water-mask-mm L   a synthetic water-only case: an L-mm cube mask with the target at its centre, or
   --mask FILE         a BabelBrain step-1 mask (<target>_<f>kHz_<PPW>PPW_BabelViscoInput.nii.gz) for a head
-                      run, with the CT files step 1 wrote next to it (--use-ct).
+                      run, with the CT files step 1 wrote next to it (--use-ct). As BabelBrain's own step 2
+                      does, the head run is followed by a water-only run on the same mask, which step 3
+                      (thermal) needs; --no-water skips it.
 Outputs in --out: BabelBrain's own result files, and metrics.json with:
   peak position and offset from the target (mm), |p| at the target, the connected half-maximum zone
   around the peak (volume, centroid, centroid offset from the target, extents), and the scale that makes
-  |p(target)| equal --calibrate-pa (for a calibration run).
+  |p(target)| equal --calibrate-pa (for a calibration run). Head runs add the water run's peak, |p| at
+  the target and the head/water ratio there.
 
 Example (water, BabelBrain's default PPW for 650 kHz):
   python run_element_array.py --array drive.npz --water-mask-mm 40 --out runs/centre --backend cuda
@@ -115,6 +118,8 @@ def main():
                    help="water-only case: mask size in mm, one value (cube) or three (x y z, Tx frame)")
     g.add_argument("--mask")
     ap.add_argument("--use-ct", action="store_true", help="head run on step-1 CT outputs (CT/pseudo-CT path)")
+    ap.add_argument("--no-water", action="store_true",
+                    help="head runs: skip the water-only run on the same mask (step 3 then can't run)")
     ap.add_argument("--ppw", type=int, default=None, help="default: BabelBrain's GUI default for the frequency")
     ap.add_argument("--backend", choices=["cuda", "opencl", "cpu"], default="cuda")
     ap.add_argument("--calibrate-pa", type=float, default=None)
@@ -182,6 +187,20 @@ def main():
                                  bForceRecalc=True, bDisplay=False, bMinimalSaving=False)
     wall = time.time() - t0
     open(os.path.join(args.out, "babelbrain.log"), "w").write(log.getvalue())
+    out_w = None
+    if not water and not args.no_water:
+        # BabelBrain's own step 2 (CalculateFieldProcess) follows the head run with a water-only run on the same
+        # mask. Step 3 (thermal) reads it next to the head result as <...>Water_DataForSim.h5.
+        t1 = time.time()
+        logw = io.StringIO()
+        with contextlib.redirect_stdout(logw):
+            out_w = RUN_SIM().RunCases(targets=[target], ID="case", basedir=work + os.sep, Frequencies=[f0],
+                                       basePPW=[ppw], bWaterOnly=True, bUseCT=args.use_ct,
+                                       COMPUTING_BACKEND=backend, deviceName=dev,
+                                       ElementArrayFile=os.path.abspath(args.array),
+                                       bForceRecalc=True, bDisplay=False, bMinimalSaving=False)
+        wall_w = time.time() - t1
+        open(os.path.join(args.out, "babelbrain_water.log"), "w").write(logw.getvalue())
 
     D = ReadFromH5py(out[0])
     p = np.asarray(D["p_amp"], float)
@@ -222,6 +241,14 @@ def main():
                  envelope_target=float(env[tuple(tgt)]))
     if args.offtarget:
         m.update(offtarget_metrics(D, p, tgt, hs, f0, ea, args))
+    if out_w:
+        W = ReadFromH5py(out_w[0])
+        pw = np.asarray(W["p_amp"], float)
+        if pw.shape != p.shape:
+            raise SystemExit(f"water run grid {pw.shape} differs from the head run's {p.shape}")
+        m.update(water_datafile=os.path.relpath(out_w[0], args.out), water_wall_s=round(wall_w, 1),
+                 water_p_peak=float(pw.max()), water_p_target=float(pw[tuple(tgt)]),
+                 head_over_water_at_target=m["p_target"] / float(pw[tuple(tgt)]))
     if args.calibrate_pa:
         m["calibration_scale"] = args.calibrate_pa / m["p_target"]
     json.dump(m, open(os.path.join(args.out, "metrics.json"), "w"), indent=1)

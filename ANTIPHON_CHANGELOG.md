@@ -38,7 +38,7 @@ Upstream base: `upstream/main` at `29b1026` (7 Oct 2026).
 | `OfflineBatchExamples/ElementArray/run_thermal.py` | added | 2026-10-14 | Headless BabelBrain step 3 (thermal) on a step-2 head result: GUI arguments and defaults; as-sent intensity mode; temperature, rise and CEM43 per tissue |
 | `containers/run_step1.sbatch` | added | 2026-10-14 | Slurm GPU job: BabelBrain step 1 only, so one head model serves many step-2 runs |
 | `containers/run_thermal.sbatch` | added | 2026-10-14 | Slurm GPU job: BabelBrain step 3 (thermal) on a step-2 head result |
-| `OfflineBatchExamples/ElementArray/run_txrx.py` | added | 2026-10-15 | Headless TxRx driver: domain built once, one FDTD run per transmit set and material parameter set; echo-box crop; traces on a receive grid |
+| `OfflineBatchExamples/ElementArray/run_txrx.py` | added | 2026-10-15 | Headless TxRx driver: domain built once, one FDTD run per transmit set and material parameter set (incl. a coupling layer with its own density, sound speed and attenuation); echo-box crop; traces on a receive grid |
 | `containers/run_txrx.sbatch` | added | 2026-10-15 | Slurm GPU job running the TxRx driver (optionally twice, e.g. head then water) |
 
 ## Log
@@ -185,3 +185,10 @@ Simulates an array's own pulse-echo and through-transmit scan, so a head model c
 - added `containers/run_txrx.sbatch`: the driver in the container; `TX_ARGS2` runs a second invocation (e.g. water) in the same job.
 - Tested locally on the CPU (synthetic panels, PPW 3): reciprocity of i->j and j->i traces 3.5e-7; a slab echo arrives within 0.8 mm (one way) of the round trip; the cropped echo box and the full domain give the same echo trace (4.6e-7). Water arrival times give the grid's numerical dispersion: effective speed -8.7 % at PPW 3 (4.1 points per water wavelength) and +0.06 % at BabelBrain's default PPW 6 (8.2 points). The CW smoke test still passes.
 - modified `ANTIPHON_CHANGELOG.md`: table rows and this entry.
+
+### 2026-10-15: TxRx coupling layer gets an impedance
+
+A comparison with recorded pulse-echo and through-transmit data showed a head that both reflects more and transmits less than BabelBrain's default model, which a loss-only layer cannot produce.
+- modified `OfflineBatchExamples/ElementArray/run_txrx.py`: the coupling layer (the water within `coupling_mm` of the tissue) now takes `coupling_rho` and `coupling_sos` as well as `coupling_att_npm`, each defaulting to water's. A layer faster than the fastest existing material is refused, because the time step was set without it. The log reports the layer's impedance.
+- Tested locally on the CPU on the synthetic slab (PPW 3), with a 1.2 mm lossless layer at 1500 m/s. Lowering the density from 300 to 100 to 30 kg/m3 (0.45, 0.15, 0.045 MRayl) raises the pulse-echo energy 1.34x, 1.46x and 1.80x and lowers the through amplitude to 0.67, 0.38 and 0.13. Adding 200 Np/m at 100 kg/m3 lowers both (echo 1.23x, through 0.07). Traces stay finite.
+- modified `ANTIPHON_CHANGELOG.md`: table row and this entry.

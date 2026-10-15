@@ -12,8 +12,9 @@ the same process.
                        region (the region must lie on one side of the target along the beam axis)
   --transmit SPEC ...  one transmit set per argument; each set fires together, e.g. 10  67  0-125
   --params JSON        list of material parameter sets (default [{}]); keys: bone_att, bone_sos, skin_att,
-                       brain_att (multiply BabelBrain's values) and coupling_mm, coupling_att_npm (a lossy
-                       water-like layer in the water within coupling_mm of the skin)
+                       brain_att (multiply BabelBrain's values) and coupling_mm, coupling_rho (kg/m3),
+                       coupling_sos (m/s), coupling_att_npm (Np/m): a layer replacing the water within
+                       coupling_mm of the tissue (hair, gel, trapped air), each property defaulting to water's
 Element indices are 0-based. Outputs: <out>/txrx_p<k>_t<j>.npz (traces at the solver's sensor rate and on the
 receive grid --fs/--n-samples, t = 0 at burst onset), <out>/txrx_index.json and the BabelBrain log.
 
@@ -36,7 +37,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(HERE, "..", ".."))
 sys.path[:0] = [REPO, os.path.join(REPO, "BabelBrain")]
 
-PARAM_KEYS = {"bone_att", "bone_sos", "skin_att", "brain_att", "coupling_mm", "coupling_att_npm"}
+PARAM_KEYS = {"bone_att", "bone_sos", "skin_att", "brain_att", "coupling_mm", "coupling_rho", "coupling_sos",
+              "coupling_att_npm"}
 
 
 def parse_set(spec):
@@ -125,11 +127,16 @@ def apply_params(sim, P, brain_rows, bone_rows, log):
         if getattr(S, "_SourceMap", None) is not None:
             layer &= S._SourceMap == 0
         w = M[0]
-        M.append([w[0], w[1], 0.0, float(P.get("coupling_att_npm", w[3])), 0.0])
+        c_max = max(r[1] for r in M)
+        if P.get("coupling_sos", w[1]) > c_max:
+            raise SystemExit(f"coupling_sos {P['coupling_sos']} exceeds the fastest material ({c_max} m/s): the "
+                             "time step was set without it")
+        M.append([float(P.get("coupling_rho", w[0])), float(P.get("coupling_sos", w[1])), 0.0,
+                  float(P.get("coupling_att_npm", w[3])), 0.0])
         S._MaterialMap[layer] = len(M) - 1
         S._QCorrection = np.r_[np.ravel(q0), 1.0]
-        log(f"coupling layer: {int(layer.sum())} voxels within {P['coupling_mm']} mm of tissue, "
-            f"{M[-1][3]:.1f} Np/m")
+        log(f"coupling layer: {int(layer.sum())} voxels within {P['coupling_mm']} mm of tissue: rho {M[-1][0]:.0f} "
+            f"kg/m3, c {M[-1][1]:.0f} m/s (Z {M[-1][0] * M[-1][1] / 1e6:.3f} MRayl), {M[-1][3]:.1f} Np/m")
 
     def restore():
         S._Materials = [list(r) for r in mats0]

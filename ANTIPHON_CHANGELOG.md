@@ -28,7 +28,7 @@ Upstream base: `upstream/main` at `29b1026` (7 Oct 2026).
 | `containers/requirements.lock.txt` | added | 2026-10-13 | Hash-pinned container dependency lock (cp312 manylinux) |
 | `containers/smoke_test.py` | added | 2026-10-13 | GPU smoke test: imports, CUDA backend, tiny water FDTD |
 | `containers/smoke_test.sbatch` | added | 2026-10-13 | Slurm GPU job for the smoke test |
-| `TranscranialModeling/BabelIntegrationELEMENT_ARRAY.py` | added | 2026-10-14 | Generic element-array transducer: per-element complex drive from a definition file; volumetric per-element sources; box domain around all elements |
+| `TranscranialModeling/BabelIntegrationELEMENT_ARRAY.py` | added | 2026-10-14 | Generic element-array transducer: per-element complex drive from a definition file; volumetric per-element sources; box domain around all elements; transmit-receive (TxRx) mode with face-averaged element traces |
 | `TranscranialModeling/BabelIntegrationBASE.py` | modified | 2026-10-14 | Region hook `DomeRegionMap` in dome mode (default behaviour unchanged) |
 | `BabelBrain/CalculateFieldProcess.py` | modified | 2026-10-14 | Dispatch entry for `TxSystem == 'ElementArray'` |
 | `OfflineBatchExamples/ElementArray/run_element_array.py` | added | 2026-10-14 | Headless driver for ElementArray: water or step-1 mask; writes field metrics (peak, half-max zone, envelope, calibration scale) |
@@ -38,6 +38,8 @@ Upstream base: `upstream/main` at `29b1026` (7 Oct 2026).
 | `OfflineBatchExamples/ElementArray/run_thermal.py` | added | 2026-10-14 | Headless BabelBrain step 3 (thermal) on a step-2 head result: GUI arguments and defaults; as-sent intensity mode; temperature, rise and CEM43 per tissue |
 | `containers/run_step1.sbatch` | added | 2026-10-14 | Slurm GPU job: BabelBrain step 1 only, so one head model serves many step-2 runs |
 | `containers/run_thermal.sbatch` | added | 2026-10-14 | Slurm GPU job: BabelBrain step 3 (thermal) on a step-2 head result |
+| `OfflineBatchExamples/ElementArray/run_txrx.py` | added | 2026-10-15 | Headless TxRx driver: domain built once, one FDTD run per transmit set and material parameter set; echo-box crop; traces on a receive grid |
+| `containers/run_txrx.sbatch` | added | 2026-10-15 | Slurm GPU job running the TxRx driver (optionally twice, e.g. head then water) |
 
 ## Log
 
@@ -168,3 +170,18 @@ The first head run (14 Oct) was killed for running out of host memory as its sim
   - Tested locally on the synthetic case. With the CPU backend, samples arrive about every 12 s because the C solver holds the interpreter; the peak (VmHWM) is exact regardless.
 - modified `ANTIPHON_CHANGELOG.md`: this entry.
 
+### 2026-10-15: Transmit-receive (TxRx) mode for the element array
+
+Simulates an array's own pulse-echo and through-transmit scan, so a head model can be compared with the array's recorded echoes and transmits. The steady-state (CW) path is unchanged.
+- modified `TranscranialModeling/BabelIntegrationELEMENT_ARRAY.py`:
+  - `TxRx=dict(...)` on `BabelFTD_Simulations` (options in `TXRX_DEFAULTS`: region, duration, burst cycles, edge cycles, sensor samples per period). After `Step1`/`Step2` build the domain once, each `SetTransmit(elements)` + `Step3` + `Step4` fires a tone burst (raised-cosine edges, each element delayed by its drive phase) from the chosen elements. `ReturnTxRx()` gives every region element's face-averaged pressure from burst onset, over the same voxels as the source, so transmit and receive are reciprocal.
+  - Only the region's elements go into the domain and are recorded, so a pulse-echo run can use a box around one panel.
+  - `DomeRegionMap` now always spans the target. The base class grows the domain only toward a region that overlaps the current grid, so a one-panel box wholly outside the head grid was ignored. A two-panel box already spanned the target, so earlier runs are unaffected.
+- added `OfflineBatchExamples/ElementArray/run_txrx.py`:
+  - drives the mode headless: transmit sets and material parameter sets (bone, skin and brain attenuation scales, bone speed scale, an optional lossy coupling layer outside the skin) run in one process on one domain;
+  - `--crop-far-mm` drops the head model beyond the target on the side away from the region (echo box);
+  - `--water-only` gives the reference on the same mask;
+  - outputs traces at the solver's sensor rate and band-limited onto a receive grid (default 27.78 MHz, 5504 samples).
+- added `containers/run_txrx.sbatch`: the driver in the container; `TX_ARGS2` runs a second invocation (e.g. water) in the same job.
+- Tested locally on the CPU (synthetic panels, PPW 3): reciprocity of i->j and j->i traces 3.5e-7; a slab echo arrives within 0.8 mm (one way) of the round trip; the cropped echo box and the full domain give the same echo trace (4.6e-7). Water arrival times give the grid's numerical dispersion: effective speed -8.7 % at PPW 3 (4.1 points per water wavelength) and +0.06 % at BabelBrain's default PPW 6 (8.2 points). The CW smoke test still passes.
+- modified `ANTIPHON_CHANGELOG.md`: table rows and this entry.

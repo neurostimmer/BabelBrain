@@ -19,6 +19,13 @@ z along BabelBrain's beam axis (the transducer side is z < 0, as for other trans
     f0_hz        drive frequency (must match the simulation frequency)
     pressure_scale_pa (optional) multiplies every source amplitude (calibration); default 1
 Element n's source is  s * |drive_n| * sin(2*pi*f0*t + angle(drive_n)), ramped up over the first cycles.
+
+Transmit-receive (TxRx) mode, for comparing with an array's own pulse-echo and through-transmit recordings:
+pass TxRx=dict(...) to BabelFTD_Simulations (see TXRX_DEFAULTS). The domain is built once (Step1/Step2); then,
+per transmit set, SetTransmit() + Step3 + Step4 fire a tone burst from the chosen elements (each delayed by its
+drive phase) and ReturnTxRx() gives every element's face-averaged pressure trace from t = 0 (burst onset). Only
+the elements listed in TxRx['region'] (default: all) are put in the domain and recorded, so a pulse-echo run can
+use a box around one panel.
 '''
 import hashlib
 import os
@@ -31,6 +38,24 @@ from .BabelIntegrationBASE import (RUN_SIM_BASE,
                                    SimulationConditionsBASE)
 
 ELEMENT_ARRAY_FORMAT = 'element_array_v1'
+
+TXRX_DEFAULTS = dict(
+    region=None,            # element indices that must fit in the domain and are recorded (None: all)
+    duration_s=200e-6,      # simulated (and recorded) time from burst onset
+    burst_cycles=10.0,      # tone-burst length in cycles of f0
+    edge_cycles=1.0,        # raised-cosine on/off edges, cycles
+    sensor_ppp=10,          # at least this many recorded samples per period of f0
+)
+
+
+def ToneBurst(t, f0, n_cycles=10.0, edge_cycles=1.0):
+    '''sin(2 pi f0 t) over [0, n_cycles/f0] with raised-cosine edges of edge_cycles/f0; zero outside.'''
+    T, e = n_cycles / f0, edge_cycles / f0
+    w = np.ones_like(t)
+    if e > 0:
+        w = np.where(t < e, 0.5 * (1 - np.cos(np.pi * t / e)), w)
+        w = np.where(t > T - e, 0.5 * (1 - np.cos(np.pi * (T - t) / e)), w)
+    return np.where((t >= 0) & (t <= T), np.sin(2 * np.pi * f0 * t) * w, 0.0)
 
 
 def LoadElementArray(fname):
@@ -102,15 +127,16 @@ class RUN_SIM(RUN_SIM_BASE):
 
 
 class BabelFTD_Simulations(BabelFTD_Simulations_BASE):
-    def __init__(self, ElementArrayFile='', **kargs):
+    def __init__(self, ElementArrayFile='', TxRx=None, **kargs):
         self._ElementArrayFile = ElementArrayFile
+        self._TxRx = TxRx
         super().__init__(**kargs)
         self._bDoRefocusing = False
         self._bTightNarrowBeamDomain = False
 
     def CreateSimConditions(self, **kargs):
         kargs['bTightNarrowBeamDomain'] = False
-        return SimulationConditions(ElementArrayFile=self._ElementArrayFile, **kargs)
+        return SimulationConditions(ElementArrayFile=self._ElementArrayFile, TxRx=self._TxRx, **kargs)
 
     def GenerateSTLTx(self, prefix):
         '''Export the element faces as an STL in the mask's world coordinates (for Slicer or Brainsight).'''
@@ -130,6 +156,14 @@ class BabelFTD_Simulations(BabelFTD_Simulations_BASE):
             stl.vectors[2 * i + 1] = q[[1, 2, 3]]
         stl.save(os.path.dirname(self._MASKFNAME) + os.sep + prefix + 'Tx.stl')
 
+    def SetTransmit(self, elements):
+        '''TxRx mode: the elements that fire in the next Step3/Step4.'''
+        self._SIM_SETTINGS.SetTransmit(elements)
+
+    def ReturnTxRx(self):
+        '''TxRx mode: traces of the last Step4 (see SimulationConditions.ReturnTxRx).'''
+        return self._SIM_SETTINGS.ReturnTxRx()
+
     def AddSaveDataSim(self, DataForSim):
         super().AddSaveDataSim(DataForSim)
         S = self._SIM_SETTINGS
@@ -143,9 +177,23 @@ class BabelFTD_Simulations(BabelFTD_Simulations_BASE):
 class SimulationConditions(SimulationConditionsBASE):
     '''Element array: per-element volumetric stress sources with complex drive; box domain around all elements.'''
 
-    def __init__(self, ElementArrayFile='', DomainMargin=3, **kargs):
+    def __init__(self, ElementArrayFile='', DomainMargin=3, TxRx=None, **kargs):
         self._EA = LoadElementArray(ElementArrayFile)
-        c = self._EA['centers_m']
+        n = self._EA['NumberElems']
+        self._TxRx = None
+        if TxRx is not None:
+            unknown = set(TxRx) - set(TXRX_DEFAULTS)
+            if unknown:
+                raise ValueError(f'unknown TxRx options {sorted(unknown)}')
+            self._TxRx = dict(TXRX_DEFAULTS, **TxRx)
+            region = self._TxRx['region']
+            region = np.arange(n) if region is None else np.unique(np.asarray(region, np.int64))
+            if region.size == 0 or region.min() < 0 or region.max() >= n:
+                raise ValueError('TxRx region must list valid element indices')
+            self._TxRx['region'] = region
+        self._Region = np.arange(n) if self._TxRx is None else self._TxRx['region']
+        self._Transmit = None
+        c = self._EA['centers_m'][self._Region]
         ext = np.ptp(c, axis=0) + self._EA['size_m'].max()
         kargs['Aperture'] = float(ext.max())          # informational; the domain comes from DomeRegionMap
         kargs['FocalLength'] = 0.0
@@ -160,14 +208,26 @@ class SimulationConditions(SimulationConditionsBASE):
         super().UpdateConditions(SkullMaskNii, AlphaCFL=AlphaCFL, bWaterOnly=bWaterOnly,
                                  bForceHomogenousMedium=bForceHomogenousMedium,
                                  BenchmarkTestFile=BenchmarkTestFile, DomeType=True)
+        if self._TxRx is not None:
+            # Record from burst onset for the requested duration, at >= sensor_ppp samples per period.
+            dt = self._TemporalStep
+            self._TimeSimulation = int(np.ceil(self._TxRx['duration_s'] / dt)) * dt
+            ppp = int(self._PPP)
+            subs = [d for d in range(1, ppp + 1) if ppp % d == 0 and ppp // d >= self._TxRx['sensor_ppp']]
+            self._SensorSubSampling = max(subs)
+            self._SensorStart = 0
 
     def DomeRegionMap(self, xfield, yfield, zfield):
         '''Region that must fit inside the domain: the box around every element face plus a margin, on both
         sides of the focus. Returns coordinates normalised so the box is |x|,|y|,|z| <= 1, and the map.'''
         half = self._EA['size_m'].max() / 2 + self._DomainMargin * self._SpatialStep
-        c = self._EA['centers_m'] + np.array([self._TxMechanicalAdjustmentX, self._TxMechanicalAdjustmentY,
-                                              self._TxMechanicalAdjustmentZ])
+        c = self._EA['centers_m'][self._Region] + np.array([self._TxMechanicalAdjustmentX,
+                                                             self._TxMechanicalAdjustmentY,
+                                                             self._TxMechanicalAdjustmentZ])
         lo, hi = c.min(0) - half, c.max(0) + half
+        # The base class grows the domain only toward a region that overlaps the current grid, so the box always
+        # spans the target (inside the grid by construction), e.g. when only one panel is in the region.
+        lo, hi = np.minimum(lo, 0.0), np.maximum(hi, 0.0)
         mid, ax = (lo + hi) / 2, (hi - lo) / 2
         xf2, yf2, zf2 = (xfield - mid[0]) / ax[0], (yfield - mid[1]) / ax[1], (zfield - mid[2]) / ax[2]
         inx, iny, inz = np.abs(xf2) <= 1.0, np.abs(yf2) <= 1.0, np.abs(zf2) <= 1.0
@@ -189,14 +249,15 @@ class SimulationConditions(SimulationConditionsBASE):
         self._u2RayleighField = np.zeros((self._N1, self._N2, self._N3), np.complex64)
 
     def _VoxeliseElements(self):
-        '''Label map (N1,N2,N3) with element n as n+1. A voxel reached by several elements goes to the element
-        with the most face samples in it (ties: lowest index). Returns the map and voxels per element.'''
+        '''Label map (N1,N2,N3) with element n as n+1 (elements in the region only). A voxel reached by several
+        elements goes to the element with the most face samples in it (ties: lowest index). Returns the map and
+        voxels per element (0 outside the region).'''
         ea = self._EA
         h = self._SpatialStep
         orig = np.array([self._XDim[0], self._YDim[0], self._ZDim[0]])
         shift = np.array([self._TxMechanicalAdjustmentX, self._TxMechanicalAdjustmentY, self._TxMechanicalAdjustmentZ])
         lin_all, el_all = [], []
-        for n in range(ea['NumberElems']):
+        for n in self._Region:
             pts, _ = ElementFacePoints(ea, n, h / 3.0)
             ijk = np.round((pts + shift - orig) / h).astype(np.int64)
             if (ijk < self._PMLThickness).any() or (ijk[:, 0] >= self._N1 - self._PMLThickness).any() or \
@@ -216,13 +277,48 @@ class SimulationConditions(SimulationConditionsBASE):
         SourceMap[vox[first]] = (el[first] + 1).astype(np.uint32)
         SourceMap = SourceMap.reshape((self._N1, self._N2, self._N3))
         nvox = np.bincount(el[first], minlength=ea['NumberElems'])
-        if (nvox == 0).any():
-            raise ValueError(f'{int((nvox == 0).sum())} element(s) got no source voxel')
+        if (nvox[self._Region] == 0).any():
+            raise ValueError(f'{int((nvox[self._Region] == 0).sum())} element(s) got no source voxel')
         if (self._MaterialMap[SourceMap > 0] != 0).any():
             print('WARNING: some element source voxels lie in tissue, not water')
         return SourceMap, nvox
 
+    def SetTransmit(self, elements):
+        if self._TxRx is None:
+            raise RuntimeError('SetTransmit needs TxRx mode')
+        tx = np.unique(np.asarray(elements, np.int64))
+        if tx.size == 0 or not np.isin(tx, self._Region).all():
+            raise ValueError('transmit elements must lie in the TxRx region')
+        self._Transmit = tx
+
     def CreateSources(self, ramp_length=4):
+        if self._TxRx is not None:
+            return self._CreateSourcesTxRx()
+        return self._CreateSourcesCW(ramp_length)
+
+    def _CreateSourcesTxRx(self):
+        '''Tone burst from each transmitting element n: s * |d_n| * w_n * burst(t - tau_n), tau_n = -arg(d_n)/w0
+        (wrapped to [0, 1/f0)), w_n as in CW mode. Other elements carry a zero source (soft sources: transparent).'''
+        if self._Transmit is None:
+            raise RuntimeError('call SetTransmit before Step3 in TxRx mode')
+        if not getattr(self, '_TxRxVoxelised', False):          # the domain is fixed: voxelise once
+            self._SourceMap, self._ElementVoxelCount = self._VoxeliseElements()
+            self._TxRxVoxelised = True
+        ea, X = self._EA, self._TxRx
+        d = ea['drive'].astype(np.complex128)
+        tau = np.mod(-np.angle(d), 2 * np.pi) / (2 * np.pi * self._Frequency)
+        T = (X['burst_cycles'] + 1.0) / self._Frequency + tau[self._Transmit].max()
+        t = np.arange(0, T + self._TemporalStep, self._TemporalStep)
+        area = (ea['size_m'][:, 0] * ea['size_m'][:, 1]) * (np.pi / 4 if ea['shape'] == 'circle' else 1.0)
+        P = np.zeros((ea['NumberElems'], t.size))
+        for n in self._Transmit:
+            w = (area[n] / self._SpatialStep ** 2) / self._ElementVoxelCount[n]
+            P[n] = ea['pressure_scale_pa'] * np.abs(d[n]) * w * ToneBurst(t - tau[n], self._Frequency,
+                                                                         X['burst_cycles'], X['edge_cycles'])
+        self._PulseSource = P
+        self._PulseAmplitude = ea['pressure_scale_pa']
+
+    def _CreateSourcesCW(self, ramp_length=4):
         '''One stress-source time series per element: s * |d_n| * w_n * sin(w t + arg d_n), ramped up over
         `ramp_length` cycles (as BabelBrain's other transducer families do). w_n = (area_n / h^2) / voxels_n
         equalises the injected source strength across elements whatever their footprint on the grid.'''
@@ -242,18 +338,51 @@ class SimulationConditions(SimulationConditionsBASE):
         self._PulseAmplitude = ea['pressure_scale_pa']
 
     def CreateSensorMap(self):
-        '''Record the whole interior (elements on several sides), plus no back-propagation sensors.'''
+        '''CW: record the whole interior (elements on several sides). TxRx: record every element face voxel.
+        No back-propagation sensors.'''
         p = self._PMLThickness
         self._SensorMap = np.zeros((self._N1, self._N2, self._N3), np.uint32)
-        self._SensorMap[p:-p, p:-p, p:-p] = 1
+        if self._TxRx is not None:
+            self._SensorMap[self._SourceMap > 0] = 1
+        else:
+            self._SensorMap[p:-p, p:-p, p:-p] = 1
         self._SensorMapBackPropagation = np.zeros((self._N1, self._N2, self._N3), np.uint32)
 
     def RUN_SIMULATION(self, bDoStressSource=False, SelRMSorPeak=1, bApplyCorrectionForDispersion=True, **kargs):
         kargs['bDoRefocusing'] = False
         super().RUN_SIMULATION(bDoStressSource=True, bApplyCorrectionForDispersion=False,
                                SelRMSorPeak=1, **kargs)
+        if self._TxRx is not None:
+            self._CollectTxRx()
+
+    def _CollectTxRx(self):
+        '''Average the recorded pressure over each element's face voxels (the source operator, so transmit and
+        receive are reciprocal). Sensor rows follow IndexSensorMap: F-order linear indices, 1-based.'''
+        from scipy import sparse
+        idx = np.asarray(self._InputParam, np.int64).ravel() - 1
+        lab = self._SourceMap.ravel(order='F')[idx].astype(np.int64) - 1
+        Pm = np.asarray(self._Sensor['Pressure'], np.float32)
+        n = self._EA['NumberElems']
+        cnt = np.bincount(lab, minlength=n).astype(np.float64)
+        avg = sparse.csr_matrix(((1.0 / cnt[lab]).astype(np.float32), (lab, np.arange(lab.size))),
+                                shape=(n, lab.size))
+        tr = np.asarray(avg @ Pm, np.float32)
+        tr[cnt == 0] = np.nan
+        self._TxRxResult = dict(traces=tr, time_s=np.asarray(self._Sensor['time'], np.float64),
+                                transmit=self._Transmit.copy(), region=self._Region.copy(),
+                                voxels=self._ElementVoxelCount.copy(), dt_s=self._TemporalStep,
+                                spatial_step_m=self._SpatialStep)
+        self._Sensor = None
+        self._TxRxResult['sensor_subsampling'] = self._SensorSubSampling
+
+    def ReturnTxRx(self):
+        '''dict(traces (N, nt) float32 face-averaged pressure, NaN outside the region; time_s (nt,) from burst
+        onset; transmit; region; voxels per element; dt_s; spatial_step_m; sensor_subsampling).'''
+        return self._TxRxResult
 
     def CalculatePhaseData(self, bRefocused=False, bDoRefocusing=True, bDoRefocusingVolume=False):
+        if self._TxRx is not None:
+            return                      # TxRx keeps time traces (ReturnTxRx), not steady-state maps
         super().CalculatePhaseData(bRefocused=bRefocused, bDoRefocusing=False)
 
     def ReturnResults(self, bDoRefocusing=True, bUseRayleighForWater=False, bDoRefocusingVolume=False):

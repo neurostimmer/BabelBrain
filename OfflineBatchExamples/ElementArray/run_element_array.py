@@ -24,6 +24,7 @@ import json
 import os
 import shutil
 import sys
+import threading
 import time
 
 import numpy as np
@@ -36,6 +37,67 @@ sys.path[:0] = [REPO, os.path.join(REPO, "BabelBrain")]
 def default_ppw(f0):
     """BabelBrain's GUI default: 9 PPW at or below 350 kHz, 6 above (BabelBrain.py)."""
     return 9 if f0 <= 350e3 else 6
+
+
+class MemLog(threading.Thread):
+    """Every `every` s, write this process's resident memory (VmRSS), its peak so far (VmHWM), the GPU memory in
+    use (nvidia-smi, if present) and the last line of the newest BabelBrain log to a TSV, line-buffered, so the
+    record survives an out-of-memory kill and the peak can be tied to a pipeline stage."""
+
+    def __init__(self, path, every, logs):
+        super().__init__(daemon=True)
+        self.path, self.every, self.logs = path, every, logs
+        self.halt = threading.Event()
+        self.t0 = time.time()
+        self.peak_gb = 0.0
+
+    @staticmethod
+    def _status():
+        st = {}
+        for ln in open("/proc/self/status"):
+            if ln.startswith(("VmRSS:", "VmHWM:")):
+                k, v = ln.split(":", 1)
+                st[k] = int(v.split()[0]) * 1024 / 1e9          # kB -> GB
+        return st.get("VmRSS", float("nan")), st.get("VmHWM", float("nan"))
+
+    def _gpu_gb(self):
+        try:
+            import subprocess
+            r = subprocess.run(["nvidia-smi", "--query-gpu=memory.used", "--format=csv,noheader,nounits", "-i", "0"],
+                               capture_output=True, text=True, timeout=10)
+            return float(r.stdout.split()[0]) * 1.048576e-3        # MiB -> GB
+        except Exception:
+            return float("nan")
+
+    def _stage(self):
+        for p in reversed(self.logs):
+            try:
+                with open(p, "rb") as f:
+                    f.seek(0, 2)
+                    f.seek(max(0, f.tell() - 4096))
+                    lines = [ln.strip() for ln in f.read().decode(errors="replace").splitlines() if ln.strip()]
+                if lines:
+                    return f"{os.path.basename(p)}: {lines[-1][:160]}"
+            except OSError:
+                continue
+        return ""
+
+    def sample(self, f):
+        rss, hwm = self._status()
+        self.peak_gb = max(self.peak_gb, hwm)
+        f.write(f"{time.time() - self.t0:.0f}\t{rss:.2f}\t{hwm:.2f}\t{self._gpu_gb():.2f}\t{self._stage()}\n")
+
+    def run(self):
+        with open(self.path, "w", buffering=1) as f:
+            f.write("t_s\trss_gb\tpeak_rss_gb\tgpu_used_gb\tlast_log_line\n")
+            self.sample(f)
+            while not self.halt.wait(self.every):
+                self.sample(f)
+            self.sample(f)
+
+    def stop(self):
+        self.halt.set()
+        self.join(timeout=30)
 
 
 def gpu_name(backend):
@@ -118,6 +180,9 @@ def main():
                    help="water-only case: mask size in mm, one value (cube) or three (x y z, Tx frame)")
     g.add_argument("--mask")
     ap.add_argument("--use-ct", action="store_true", help="head run on step-1 CT outputs (CT/pseudo-CT path)")
+    ap.add_argument("--mem-log", type=float, default=0.0, metavar="SECONDS",
+                    help="sample this process's resident memory (and GPU memory) every SECONDS into memory.tsv, "
+                         "with the last line BabelBrain logged, so the peak can be tied to a stage")
     ap.add_argument("--no-water", action="store_true",
                     help="head runs: skip the water-only run on the same mask (step 3 then can't run)")
     ap.add_argument("--ppw", type=int, default=None, help="default: BabelBrain's GUI default for the frequency")
@@ -178,29 +243,31 @@ def main():
     backend = {"cuda": 1, "opencl": 2, "cpu": 0}[args.backend]
     dev = gpu_name(args.backend)
 
+    # BabelBrain's output goes straight to log files (line-buffered), so a killed run still leaves its log.
+    log_head = os.path.join(args.out, "babelbrain.log")
+    log_water = os.path.join(args.out, "babelbrain_water.log")
+    mem = MemLog(os.path.join(args.out, "memory.tsv"), args.mem_log, [log_head, log_water]) if args.mem_log else None
+    if mem:
+        mem.start()
     t0 = time.time()
-    log = io.StringIO()
-    with contextlib.redirect_stdout(log):
+    with open(log_head, "w", buffering=1) as lf, contextlib.redirect_stdout(lf):
         out = RUN_SIM().RunCases(targets=[target], ID="case", basedir=work + os.sep, Frequencies=[f0],
                                  basePPW=[ppw], bWaterOnly=water, bUseCT=args.use_ct, COMPUTING_BACKEND=backend,
                                  deviceName=dev, ElementArrayFile=os.path.abspath(args.array),
                                  bForceRecalc=True, bDisplay=False, bMinimalSaving=False)
     wall = time.time() - t0
-    open(os.path.join(args.out, "babelbrain.log"), "w").write(log.getvalue())
     out_w = None
     if not water and not args.no_water:
         # BabelBrain's own step 2 (CalculateFieldProcess) follows the head run with a water-only run on the same
         # mask. Step 3 (thermal) reads it next to the head result as <...>Water_DataForSim.h5.
         t1 = time.time()
-        logw = io.StringIO()
-        with contextlib.redirect_stdout(logw):
+        with open(log_water, "w", buffering=1) as lf, contextlib.redirect_stdout(lf):
             out_w = RUN_SIM().RunCases(targets=[target], ID="case", basedir=work + os.sep, Frequencies=[f0],
                                        basePPW=[ppw], bWaterOnly=True, bUseCT=args.use_ct,
                                        COMPUTING_BACKEND=backend, deviceName=dev,
                                        ElementArrayFile=os.path.abspath(args.array),
                                        bForceRecalc=True, bDisplay=False, bMinimalSaving=False)
         wall_w = time.time() - t1
-        open(os.path.join(args.out, "babelbrain_water.log"), "w").write(logw.getvalue())
 
     D = ReadFromH5py(out[0])
     p = np.asarray(D["p_amp"], float)
@@ -218,7 +285,7 @@ def main():
     zone, cen, vol_mm3, ext = half_max_zone(p, peak, hs)
     m = dict(array=os.path.basename(args.array), array_sha256=ea["sha256"], f0_hz=f0, ppw=ppw,
              spatial_step_mm=hs * 1e3, water_only=water, backend=args.backend, device=dev, wall_s=round(wall, 1),
-             domain=[ln.split("=")[-1] for ln in log.getvalue().splitlines() if "Final Domain size" in ln][-1:],
+             domain=[ln.split("=")[-1].strip() for ln in open(log_head) if "Final Domain size" in ln][-1:],
              target_voxel=tgt.tolist(), peak_voxel=peak.tolist(),
              peak_offset_mm=((peak - tgt) * hs * 1e3).tolist(), p_peak=float(p.max()), p_target=float(p[tuple(tgt)]),
              halfmax_zone_mm3=vol_mm3, halfmax_centroid_offset_mm=((cen - tgt) * hs * 1e3).tolist(),
@@ -251,6 +318,9 @@ def main():
                  head_over_water_at_target=m["p_target"] / float(pw[tuple(tgt)]))
     if args.calibrate_pa:
         m["calibration_scale"] = args.calibrate_pa / m["p_target"]
+    if mem:
+        mem.stop()
+        m.update(host_peak_rss_gb=mem.peak_gb, memory_log="memory.tsv")
     json.dump(m, open(os.path.join(args.out, "metrics.json"), "w"), indent=1)
     print(json.dumps({k: v for k, v in m.items() if k != "element_source_voxels"}, indent=1))
 

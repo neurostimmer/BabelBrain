@@ -158,3 +158,13 @@ One head model can now be built once and reused by any number of acoustic runs, 
 - added `containers/run_thermal.sbatch`: step 3 on a step-2 head result.
 - Tested locally on the CPU on a synthetic layered head (T1W-only labels, PPW 3, two 8x8 panels): head then water in 49 s; thermal in 9 s on PoCL, with `PressureRatio` exactly 1 in drive mode and the target rise below the brain peak. With `fork`, the thermal worker deadlocked at its first BHTE call.
 - modified `ANTIPHON_CHANGELOG.md`: table rows and this entry.
+
+### 2026-10-15: Step-2 driver keeps its log and records memory
+
+The first head run (14 Oct) was killed for running out of host memory as its simulation ended. The driver held BabelBrain's output in memory, so the log was lost with it.
+- modified `OfflineBatchExamples/ElementArray/run_element_array.py`:
+  - BabelBrain's output now goes straight to `babelbrain.log` and `babelbrain_water.log`, line-buffered, so a killed run still leaves its log and live progress ("Doing step N of M").
+  - `--mem-log SECONDS`: a thread writes `memory.tsv` with the process's resident memory, its peak so far, GPU memory in use, and the last log line, so the peak can be tied to a stage. `metrics.json` adds `host_peak_rss_gb`.
+  - Tested locally on the synthetic case. With the CPU backend, samples arrive about every 12 s because the C solver holds the interpreter; the peak (VmHWM) is exact regardless.
+- modified `ANTIPHON_CHANGELOG.md`: this entry.
+

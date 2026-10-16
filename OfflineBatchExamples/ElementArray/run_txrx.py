@@ -203,7 +203,7 @@ def apply_params(sim, P, brain_rows, bone_rows, log, ct_hu=None):
         M.append([float(P.get("coupling_rho", w[0])), float(P.get("coupling_sos", w[1])), 0.0,
                   float(P.get("coupling_att_npm", w[3])), 0.0])
         S._MaterialMap[layer] = len(M) - 1
-        S._QCorrection = np.r_[np.ravel(q0), 1.0]
+        S._QCorrection = np.r_[np.ravel(S._QCorrection), 1.0]     # append: texture rows may precede this one
         log(f"coupling layer: {int(layer.sum())} voxels within {P['coupling_mm']} mm of tissue: rho {M[-1][0]:.0f} "
             f"kg/m3, c {M[-1][1]:.0f} m/s (Z {M[-1][0] * M[-1][1] / 1e6:.3f} MRayl), {M[-1][3]:.1f} Np/m")
 

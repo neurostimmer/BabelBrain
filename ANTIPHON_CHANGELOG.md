@@ -203,3 +203,8 @@ Recorded through-transmits show path-to-path phase and amplitude scatter that a 
   - Texture needs `--use-ct`.
 - Tested locally on the CPU on a synthetic CT-path case (a 3 mm slab at 1000 HU, PPW 3): achieved SD 300 HU as requested; the same seed gives identical traces; a different seed gives a different field; traces stay finite with speeds up to 1.3x the time step's reference.
 - modified `ANTIPHON_CHANGELOG.md`: table row and this entry.
+
+### 2026-10-16: Fix: bone texture with a coupling layer
+
+- modified `OfflineBatchExamples/ElementArray/run_txrx.py`: the coupling layer now appends its Q-correction entry to the current list. Before, it rebuilt the list from the copy taken before the texture rows were added, so texture plus layer left the Q corrections shorter than the material table (1014 vs 1655), and BabelViscoFDTD stopped at the relaxation setup. Checked with a mock CT-path map: texture plus layer gives 598 materials and 598 Q corrections, and restore returns the original table and map.
+- modified `ANTIPHON_CHANGELOG.md`: this entry.

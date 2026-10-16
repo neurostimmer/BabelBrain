@@ -38,7 +38,7 @@ Upstream base: `upstream/main` at `29b1026` (7 Oct 2026).
 | `OfflineBatchExamples/ElementArray/run_thermal.py` | added | 2026-10-14 | Headless BabelBrain step 3 (thermal) on a step-2 head result: GUI arguments and defaults; as-sent intensity mode; temperature, rise and CEM43 per tissue |
 | `containers/run_step1.sbatch` | added | 2026-10-14 | Slurm GPU job: BabelBrain step 1 only, so one head model serves many step-2 runs |
 | `containers/run_thermal.sbatch` | added | 2026-10-14 | Slurm GPU job: BabelBrain step 3 (thermal) on a step-2 head result |
-| `OfflineBatchExamples/ElementArray/run_txrx.py` | added | 2026-10-15 | Headless TxRx driver: domain built once, one FDTD run per transmit set and material parameter set (incl. a coupling layer with its own density, sound speed and attenuation); echo-box crop; traces on a receive grid |
+| `OfflineBatchExamples/ElementArray/run_txrx.py` | added | 2026-10-15 | Headless TxRx driver: domain built once, one FDTD run per transmit set and material parameter set (incl. a coupling layer with its own density, sound speed and attenuation, and a seeded bone HU texture on the CT path); echo-box crop; traces on a receive grid |
 | `containers/run_txrx.sbatch` | added | 2026-10-15 | Slurm GPU job running the TxRx driver (optionally twice, e.g. head then water) |
 
 ## Log
@@ -191,4 +191,15 @@ Simulates an array's own pulse-echo and through-transmit scan, so a head model c
 A comparison with recorded pulse-echo and through-transmit data showed a head that both reflects more and transmits less than BabelBrain's default model, which a loss-only layer cannot produce.
 - modified `OfflineBatchExamples/ElementArray/run_txrx.py`: the coupling layer (the water within `coupling_mm` of the tissue) now takes `coupling_rho` and `coupling_sos` as well as `coupling_att_npm`, each defaulting to water's. A layer faster than the fastest existing material is refused, because the time step was set without it. The log reports the layer's impedance.
 - Tested locally on the CPU on the synthetic slab (PPW 3), with a 1.2 mm lossless layer at 1500 m/s. Lowering the density from 300 to 100 to 30 kg/m3 (0.45, 0.15, 0.045 MRayl) raises the pulse-echo energy 1.34x, 1.46x and 1.80x and lowers the through amplitude to 0.67, 0.38 and 0.13. Adding 200 Np/m at 100 kg/m3 lowers both (echo 1.23x, through 0.07). Traces stay finite.
+- modified `ANTIPHON_CHANGELOG.md`: table row and this entry.
+
+### 2026-10-16: TxRx bone texture (CT path)
+
+Recorded through-transmits show path-to-path phase and amplitude scatter that a smooth pseudo-CT skull does not produce. A seeded random texture on the bone HU reproduces those statistics.
+- modified `OfflineBatchExamples/ElementArray/run_txrx.py`: parameters `bone_tex_sd_hu`, `bone_tex_ell_mm`, `bone_tex_seed`.
+  - The field is zero-mean Gaussian on the bone voxels, with covariance sd^2 exp(-r^2 / (2 ell^2)). It is white noise from a splitmix64 hash of each voxel's offset from the target, smoothed with a Gaussian filter and scaled to the requested SD over the bone. A seed therefore gives the same texture in a full domain and a cropped echo box.
+  - Textured voxels get new material rows on a 5 HU grid, built with BabelBrain's own CT mappings (Marsac density; Webb speed and attenuation with the run's CT combination; attenuation times `bone_att`) and the bone rows' Q correction.
+  - HU is clipped so that sound speed stays between 1200 m/s and 1.3 times the fastest material the time step was set for.
+  - Texture needs `--use-ct`.
+- Tested locally on the CPU on a synthetic CT-path case (a 3 mm slab at 1000 HU, PPW 3): achieved SD 300 HU as requested; the same seed gives identical traces; a different seed gives a different field; traces stay finite with speeds up to 1.3x the time step's reference.
 - modified `ANTIPHON_CHANGELOG.md`: table row and this entry.

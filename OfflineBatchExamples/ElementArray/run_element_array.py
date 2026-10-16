@@ -110,6 +110,28 @@ def gpu_name(backend):
     return "CPU"
 
 
+def install_medium_hook(P, case_dir, prefix, use_ct):
+    """Apply medium settings (medium_params.apply_params) to every head (not water-only) run, after BabelBrain's Step2
+    and before the sources and the solve."""
+    import nibabel
+    from TranscranialModeling import BabelIntegrationELEMENT_ARRAY as EA
+    from medium_params import PARAM_KEYS, apply_params, material_rows
+    if set(P) - PARAM_KEYS:
+        raise SystemExit(f"unknown medium settings {sorted(set(P) - PARAM_KEYS)}")
+    seg = bool((np.asarray(nibabel.load(os.path.join(case_dir, prefix + "BabelViscoInput.nii.gz")).dataobj) > 5).any())
+    ct_hu = (np.load(os.path.join(case_dir, prefix + "CT-cal.npz"))["UniqueHU"].astype(np.float32) if use_ct else None)
+    orig = EA.BabelFTD_Simulations.Step2_CalculateRayleighFieldsForward
+
+    def step2(self, *a, **k):
+        out = orig(self, *a, **k)
+        if not self._bWaterOnly:
+            brain_rows, bone_rows = material_rows(use_ct, seg, len(self._SIM_SETTINGS._Materials))
+            apply_params(self, P, brain_rows, bone_rows, print, ct_hu=ct_hu)
+            print(f"medium settings applied: {P}")
+        return out
+    EA.BabelFTD_Simulations.Step2_CalculateRayleighFieldsForward = step2
+
+
 def vox_to_tx(D, ijk, shape):
     """Saved-volume voxel (possibly fractional) -> Tx-frame position in mm (target at the origin).
     The saved volumes are flipped along z relative to z_vec."""
@@ -187,6 +209,9 @@ def main():
                     help="head runs: skip the water-only run on the same mask (step 3 then can't run)")
     ap.add_argument("--ppw", type=int, default=None, help="default: BabelBrain's GUI default for the frequency")
     ap.add_argument("--backend", choices=["cuda", "opencl", "cpu"], default="cuda")
+    ap.add_argument("--params", default=None,
+                    help="medium settings for the head run (JSON dict, or @file holding a dict or a one-item list); see "
+                         "medium_params.py: bone_att, coupling_mm/_rho/_sos/_att_npm, bone_tex_sd_hu/_ell_mm/_seed, ...")
     ap.add_argument("--calibrate-pa", type=float, default=None)
     ap.add_argument("--offtarget", action="store_true",
                     help="off-target analysis: focal = max |p| within --focal-radius-mm of the target; envelope = "
@@ -242,6 +267,11 @@ def main():
         water = False
     backend = {"cuda": 1, "opencl": 2, "cpu": 0}[args.backend]
     dev = gpu_name(args.backend)
+    medium = None
+    if args.params:
+        medium = json.load(open(args.params[1:])) if args.params.startswith("@") else json.loads(args.params)
+        medium = medium[0] if isinstance(medium, list) else medium
+        install_medium_hook(medium, case_dir, target + tag, args.use_ct and not water)
 
     # BabelBrain's output goes straight to log files (line-buffered), so a killed run still leaves its log.
     log_head = os.path.join(args.out, "babelbrain.log")
@@ -321,6 +351,7 @@ def main():
     if mem:
         mem.stop()
         m.update(host_peak_rss_gb=mem.peak_gb, memory_log="memory.tsv")
+    m["medium_settings"] = medium
     json.dump(m, open(os.path.join(args.out, "metrics.json"), "w"), indent=1)
     print(json.dumps({k: v for k, v in m.items() if k != "element_source_voxels"}, indent=1))
 

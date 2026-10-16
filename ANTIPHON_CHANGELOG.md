@@ -40,6 +40,7 @@ Upstream base: `upstream/main` at `29b1026` (7 Oct 2026).
 | `containers/run_thermal.sbatch` | added | 2026-10-14 | Slurm GPU job: BabelBrain step 3 (thermal) on a step-2 head result |
 | `OfflineBatchExamples/ElementArray/run_txrx.py` | added | 2026-10-15 | Headless TxRx driver: domain built once, one FDTD run per transmit set and material parameter set (incl. a coupling layer with its own density, sound speed and attenuation, and a seeded bone HU texture on the CT path); echo-box crop; traces on a receive grid |
 | `containers/run_txrx.sbatch` | added | 2026-10-15 | Slurm GPU job running the TxRx driver (optionally twice, e.g. head then water) |
+| `OfflineBatchExamples/ElementArray/medium_params.py` | added | 2026-10-16 | Medium settings shared by the ElementArray drivers: material scales, coupling layer, seeded bone HU texture |
 
 ## Log
 
@@ -208,3 +209,14 @@ Recorded through-transmits show path-to-path phase and amplitude scatter that a 
 
 - modified `OfflineBatchExamples/ElementArray/run_txrx.py`: the coupling layer now appends its Q-correction entry to the current list. Before, it rebuilt the list from the copy taken before the texture rows were added, so texture plus layer left the Q corrections shorter than the material table (1014 vs 1655), and BabelViscoFDTD stopped at the relaxation setup. Checked with a mock CT-path map: texture plus layer gives 598 materials and 598 Q corrections, and restore returns the original table and map.
 - modified `ANTIPHON_CHANGELOG.md`: this entry.
+
+### 2026-10-16: Medium settings for steady-state (CW) runs; shared module
+
+The tuned medium (coupling layer, bone attenuation scale, bone texture) can now be used for predictions with the steady-state driver, not only in transmit-receive runs.
+- added `OfflineBatchExamples/ElementArray/medium_params.py`: the medium settings, moved unchanged out of the TxRx driver (`PARAM_KEYS`, `hash_normal`, `bone_texture`, `material_rows`, `apply_params`).
+- modified `OfflineBatchExamples/ElementArray/run_txrx.py`: imports them from `medium_params.py`; behaviour unchanged.
+- modified `OfflineBatchExamples/ElementArray/run_element_array.py`:
+  - `--params` (a JSON dict, or `@file` holding a dict or a one-item list) applies the settings to the head run only, after BabelBrain's Step2 and before the sources and the solve. The water companion run is untouched.
+  - The settings are recorded in `metrics.json` as `medium_settings`.
+- Checked without a solve on a mock CT-path map: a head run gets the settings with materials and Q corrections aligned (164 -> 816 each); a water run is unchanged. The TxRx driver resolves the moved functions.
+- modified `ANTIPHON_CHANGELOG.md`: table row and this entry.

@@ -7,7 +7,8 @@ and either
   --mask FILE         a BabelBrain step-1 mask (<target>_<f>kHz_<PPW>PPW_BabelViscoInput.nii.gz) for a head
                       run, with the CT files step 1 wrote next to it (--use-ct). As BabelBrain's own step 2
                       does, the head run is followed by a water-only run on the same mask, which step 3
-                      (thermal) needs; --no-water skips it.
+                      (thermal) needs; --no-water skips it. With --water-only, only that water run is done,
+                      so head and water can be separate jobs.
 Outputs in --out: BabelBrain's own result files, and metrics.json with:
   peak position and offset from the target (mm), |p| at the target, the connected half-maximum zone
   around the peak (volume, centroid, centroid offset from the target, extents), and the scale that makes
@@ -210,6 +211,9 @@ def main():
                          "with the last line BabelBrain logged, so the peak can be tied to a stage")
     ap.add_argument("--no-water", action="store_true",
                     help="head runs: skip the water-only run on the same mask (step 3 then can't run)")
+    ap.add_argument("--water-only", action="store_true",
+                    help="with --mask: only the water run on the head mask's grid, i.e. the head run's water companion "
+                         "as a job of its own")
     ap.add_argument("--ppw", type=int, default=None, help="default: BabelBrain's GUI default for the frequency")
     ap.add_argument("--backend", choices=["cuda", "opencl", "cpu"], default="cuda")
     ap.add_argument("--params", default=None,
@@ -267,7 +271,7 @@ def main():
         for f in os.listdir(src):
             if f.startswith(target + tag):
                 shutil.copy2(os.path.join(src, f), case_dir)
-        water = False
+        water = args.water_only
     backend = {"cuda": 1, "opencl": 2, "cpu": 0}[args.backend]
     dev = gpu_name(args.backend)
     medium = None

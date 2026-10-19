@@ -202,6 +202,9 @@ def main():
                    help="water-only case: mask size in mm, one value (cube) or three (x y z, Tx frame)")
     g.add_argument("--mask")
     ap.add_argument("--use-ct", action="store_true", help="head run on step-1 CT outputs (CT/pseudo-CT path)")
+    ap.add_argument("--petra", action="store_true",
+                    help="the step-1 CT came from BabelBrain's PETRA path (CTType 3): bone density by SimNIBS's PETRA "
+                         "calibration, as the GUI sets bPETRA")
     ap.add_argument("--mem-log", type=float, default=0.0, metavar="SECONDS",
                     help="sample this process's resident memory (and GPU memory) every SECONDS into memory.tsv, "
                          "with the last line BabelBrain logged, so the peak can be tied to a stage")
@@ -282,8 +285,8 @@ def main():
     t0 = time.time()
     with open(log_head, "w", buffering=1) as lf, contextlib.redirect_stdout(lf):
         out = RUN_SIM().RunCases(targets=[target], ID="case", basedir=work + os.sep, Frequencies=[f0],
-                                 basePPW=[ppw], bWaterOnly=water, bUseCT=args.use_ct, COMPUTING_BACKEND=backend,
-                                 deviceName=dev, ElementArrayFile=os.path.abspath(args.array),
+                                 basePPW=[ppw], bWaterOnly=water, bUseCT=args.use_ct, bPETRA=args.petra,
+                                 COMPUTING_BACKEND=backend, deviceName=dev, ElementArrayFile=os.path.abspath(args.array),
                                  bForceRecalc=True, bDisplay=False, bMinimalSaving=False)
     wall = time.time() - t0
     out_w = None
@@ -293,7 +296,7 @@ def main():
         t1 = time.time()
         with open(log_water, "w", buffering=1) as lf, contextlib.redirect_stdout(lf):
             out_w = RUN_SIM().RunCases(targets=[target], ID="case", basedir=work + os.sep, Frequencies=[f0],
-                                       basePPW=[ppw], bWaterOnly=True, bUseCT=args.use_ct,
+                                       basePPW=[ppw], bWaterOnly=True, bUseCT=args.use_ct, bPETRA=args.petra,
                                        COMPUTING_BACKEND=backend, deviceName=dev,
                                        ElementArrayFile=os.path.abspath(args.array),
                                        bForceRecalc=True, bDisplay=False, bMinimalSaving=False)

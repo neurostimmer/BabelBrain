@@ -31,14 +31,14 @@ Upstream base: `upstream/main` at `29b1026` (7 Oct 2026).
 | `TranscranialModeling/BabelIntegrationELEMENT_ARRAY.py` | added | 2026-10-14 | Generic element-array transducer: per-element complex drive from a definition file; volumetric per-element sources; box domain around all elements; transmit-receive (TxRx) mode with face-averaged element traces |
 | `TranscranialModeling/BabelIntegrationBASE.py` | modified | 2026-10-14 | Region hook `DomeRegionMap` in dome mode (default behaviour unchanged) |
 | `BabelBrain/CalculateFieldProcess.py` | modified | 2026-10-14 | Dispatch entry for `TxSystem == 'ElementArray'` |
-| `OfflineBatchExamples/ElementArray/run_element_array.py` | added | 2026-10-14 | Headless driver for ElementArray: water or step-1 mask; writes field metrics (peak, half-max zone, envelope, calibration scale) |
+| `OfflineBatchExamples/ElementArray/run_element_array.py` | added | 2026-10-14 | Headless driver for ElementArray: water or step-1 mask (CT path, or PETRA path with `--petra`); writes field metrics (peak, half-max zone, envelope, calibration scale) |
 | `containers/run_element_array.sbatch` | added | 2026-10-14 | Slurm GPU job running the driver in the container |
 | `OfflineBatchExamples/ElementArray/run_step1.py` | added | 2026-10-14 | Headless BabelBrain step 1 exactly as the GUI runs it (grid step, isotropic T1, default advanced options, CalculateMaskProcess); box FOV option |
 | `containers/run_head_element_array.sbatch` | added | 2026-10-14 | Slurm GPU job: step 1 then step 2 (CT path) for an element array; 3 h, 96 GB |
 | `OfflineBatchExamples/ElementArray/run_thermal.py` | added | 2026-10-14 | Headless BabelBrain step 3 (thermal) on a step-2 head result: GUI arguments and defaults; as-sent intensity mode; temperature, rise and CEM43 per tissue |
 | `containers/run_step1.sbatch` | added | 2026-10-14 | Slurm GPU job: BabelBrain step 1 only, so one head model serves many step-2 runs |
 | `containers/run_thermal.sbatch` | added | 2026-10-14 | Slurm GPU job: BabelBrain step 3 (thermal) on a step-2 head result |
-| `OfflineBatchExamples/ElementArray/run_txrx.py` | added | 2026-10-15 | Headless TxRx driver: domain built once, one FDTD run per transmit set and material parameter set (incl. a coupling layer with its own density, sound speed and attenuation, and a seeded bone HU texture on the CT path); echo-box crop; traces on a receive grid |
+| `OfflineBatchExamples/ElementArray/run_txrx.py` | added | 2026-10-15 | Headless TxRx driver: domain built once, one FDTD run per transmit set and material parameter set (incl. a coupling layer with its own density, sound speed and attenuation, and a seeded bone HU texture on the CT path); echo-box crop; traces on a receive grid; PETRA path with `--petra` |
 | `containers/run_txrx.sbatch` | added | 2026-10-15 | Slurm GPU job running the TxRx driver (optionally twice, e.g. head then water) |
 | `OfflineBatchExamples/ElementArray/medium_params.py` | added | 2026-10-16 | Medium settings shared by the ElementArray drivers: material scales, coupling layer, seeded bone HU texture |
 
@@ -220,3 +220,11 @@ The tuned medium (coupling layer, bone attenuation scale, bone texture) can now 
   - The settings are recorded in `metrics.json` as `medium_settings`.
 - Checked without a solve on a mock CT-path map: a head run gets the settings with materials and Q corrections aligned (164 -> 816 each); a water run is unchanged. The TxRx driver resolves the moved functions.
 - modified `ANTIPHON_CHANGELOG.md`: table row and this entry.
+
+### 2026-10-19: PETRA path in the ElementArray drivers
+
+BabelBrain's GUI runs step 2 with `bPETRA=True` when the step-1 CT came from a PETRA scan (CTType 3), so bone density follows SimNIBS's PETRA calibration rather than the 120 kVp CT law. The headless drivers never set it, so a PETRA-path head model would have been simulated with the CT density law.
+- modified `OfflineBatchExamples/ElementArray/run_element_array.py`: `--petra` passes `bPETRA` to the head run and its water companion, as the GUI does.
+- modified `OfflineBatchExamples/ElementArray/run_txrx.py`: `--petra` passes `bPETRA` to head runs (not to water-only runs).
+- Default behaviour is unchanged (`bPETRA` stays False without the flag).
+- modified `ANTIPHON_CHANGELOG.md`: table rows and this entry.

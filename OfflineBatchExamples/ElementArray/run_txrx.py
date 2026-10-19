@@ -102,6 +102,9 @@ def main():
     g.add_argument("--mask")
     g.add_argument("--water-mask-mm", type=float, nargs="+")
     ap.add_argument("--use-ct", action="store_true")
+    ap.add_argument("--petra", action="store_true",
+                    help="the step-1 CT came from BabelBrain's PETRA path (CTType 3): bone density by SimNIBS's PETRA "
+                         "calibration, as the GUI sets bPETRA")
     ap.add_argument("--water-only", action="store_true", help="head mask geometry, all water (the reference)")
     ap.add_argument("--region", default=None)
     ap.add_argument("--crop-far-mm", type=float, default=None)
@@ -191,7 +194,7 @@ def main():
         sim = BabelFTD_Simulations(
             ElementArrayFile=os.path.abspath(args.array), TxRx=txrx, MASKFNAME=mfn, Frequency=f0, basePPW=ppw,
             SensorSubSampling=0, AlphaCFL=0.5, bWaterOnly=water, bDoRefocusing=False, bDisplay=False,
-            bTightNarrowBeamDomain=False,
+            bTightNarrowBeamDomain=False, bPETRA=args.petra and use_ct,
             CTFNAME=os.path.join(case, prefix + "CT.nii.gz") if use_ct else None,
             AIRMASK=(os.path.join(case, prefix + "AirRegions.nii.gz")
                      if use_ct and os.path.isfile(os.path.join(case, prefix + "AirRegions.nii.gz")) else None))

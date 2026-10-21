@@ -40,7 +40,7 @@ Upstream base: `upstream/main` at `29b1026` (7 Oct 2026).
 | `containers/run_thermal.sbatch` | added | 2026-10-14 | Slurm GPU job: BabelBrain step 3 (thermal) on a step-2 head result |
 | `OfflineBatchExamples/ElementArray/run_txrx.py` | added | 2026-10-15 | Headless TxRx driver: domain built once, one FDTD run per transmit set and material parameter set (incl. a coupling layer with its own density, sound speed and attenuation, and a seeded bone HU texture on the CT path); echo-box crop; traces on a receive grid; PETRA path with `--petra` |
 | `containers/run_txrx.sbatch` | added | 2026-10-15 | Slurm GPU job running the TxRx driver (optionally twice, e.g. head then water) |
-| `OfflineBatchExamples/ElementArray/medium_params.py` | added | 2026-10-16 | Medium settings shared by the ElementArray drivers: material scales, coupling layer, seeded bone HU texture |
+| `OfflineBatchExamples/ElementArray/medium_params.py` | added | 2026-10-16 | Medium settings shared by the ElementArray drivers: material scales, gel properties for the water outside the tissue, coupling layer, seeded bone HU texture |
 
 ## Log
 
@@ -232,4 +232,10 @@ BabelBrain's GUI runs step 2 with `bPETRA=True` when the step-1 CT came from a P
 ### 2026-10-19: Water companion as its own job
 
 - modified `OfflineBatchExamples/ElementArray/run_element_array.py`: `--water-only` with `--mask` runs only the water run on the head mask's grid, with the same arguments the head job's companion run gets. Head and water can then be submitted as separate jobs with their own limits. Without the flag nothing changes.
+- modified `ANTIPHON_CHANGELOG.md`: table row and this entry.
+
+### 2026-10-21: Gel properties for the coupling medium
+
+The gap between the transducer faces and the skin is filled with coupling gel, not water.
+- modified `OfflineBatchExamples/ElementArray/medium_params.py`: `gel_rho`, `gel_sos` and `gel_att_npm` replace the water row's density, speed and attenuation in head runs, i.e. everywhere outside the tissue. A coupling layer added in the same run sits on top of the gel. The speed may not exceed the fastest material (the time step is set before the settings apply). Checked on a mock domain: gel plus a 3 mm layer gives 5 material rows and 5 Q corrections, and the restore returns the original table.
 - modified `ANTIPHON_CHANGELOG.md`: table row and this entry.

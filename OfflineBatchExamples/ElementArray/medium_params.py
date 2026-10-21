@@ -1,16 +1,18 @@
 """Medium settings shared by the ElementArray drivers (run_txrx.py, run_element_array.py), applied to a BabelBrain
 simulation after its domain is built (Step1/Step2) and before the solve:
   bone_att, bone_sos, skin_att, brain_att   multiply BabelBrain's values for those materials
+  gel_rho, gel_sos, gel_att_npm             replace the water's density, speed and attenuation everywhere outside the
+                                            tissue (the coupling gel filling the gap); head runs only
   coupling_mm, coupling_rho, coupling_sos, coupling_att_npm
-                                            a layer replacing the water within coupling_mm of the tissue
+                                            a layer replacing the water (or gel) within coupling_mm of the tissue
   bone_tex_sd_hu, bone_tex_ell_mm, bone_tex_seed
                                             CT path: a seeded Gaussian random HU field on the bone (new material rows
                                             from BabelBrain's own CT mappings)
 """
 import numpy as np
 
-PARAM_KEYS = {"bone_att", "bone_sos", "skin_att", "brain_att", "coupling_mm", "coupling_rho", "coupling_sos",
-              "coupling_att_npm", "bone_tex_sd_hu", "bone_tex_ell_mm", "bone_tex_seed"}
+PARAM_KEYS = {"bone_att", "bone_sos", "skin_att", "brain_att", "gel_rho", "gel_sos", "gel_att_npm", "coupling_mm",
+              "coupling_rho", "coupling_sos", "coupling_att_npm", "bone_tex_sd_hu", "bone_tex_ell_mm", "bone_tex_seed"}
 
 
 def hash_normal(i, j, k, seed):
@@ -102,6 +104,13 @@ def apply_params(sim, P, brain_rows, bone_rows, log, ct_hu=None):
     M[1][3] *= P.get("skin_att", 1.0)
     for r in brain_rows:
         M[r][3] *= P.get("brain_att", 1.0)
+    if any(k in P for k in ("gel_rho", "gel_sos", "gel_att_npm")):
+        if P.get("gel_sos", M[0][1]) > max(r[1] for r in M):
+            raise SystemExit(f"gel_sos {P['gel_sos']} exceeds the fastest material: the time step was set without it")
+        M[0][0] = float(P.get("gel_rho", M[0][0]))
+        M[0][1] = float(P.get("gel_sos", M[0][1]))
+        M[0][3] = float(P.get("gel_att_npm", M[0][3]))
+        log(f"gel (all water outside the tissue): rho {M[0][0]:.0f} kg/m3, c {M[0][1]:.0f} m/s, {M[0][3]:.2f} Np/m")
     if tex:
         bone_texture(S, P, ct_hu, bone_rows[0], float(np.ravel(q0)[bone_rows[0]]), log)
     if P.get("coupling_mm", 0) > 0:

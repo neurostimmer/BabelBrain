@@ -215,7 +215,7 @@ def main():
                  domain=[S._N1, S._N2, S._N3], spatial_step_m=S._SpatialStep, dt_s=S._TemporalStep,
                  duration_s=S._TimeSimulation, setup_s=t_setup, runs=[])
     for ip, P in enumerate(params):
-        restore = (apply_params(sim, P, brain_rows, bone_rows, log, ct_hu=ct_hu) if (P and not water)
+        restore = (apply_params(sim, P, brain_rows, bone_rows, log, ct_hu=ct_hu, out=args.out) if (P and not water)
                    else (lambda: None))
         for it, tx in enumerate(tsets):
             t1 = time.time()

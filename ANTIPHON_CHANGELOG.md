@@ -38,9 +38,9 @@ Upstream base: `upstream/main` at `29b1026` (7 Oct 2026).
 | `OfflineBatchExamples/ElementArray/run_thermal.py` | added | 2026-10-14 | Headless BabelBrain step 3 (thermal) on a step-2 head result: GUI arguments and defaults; as-sent intensity mode; temperature, rise and CEM43 per tissue |
 | `containers/run_step1.sbatch` | added | 2026-10-14 | Slurm GPU job: BabelBrain step 1 only, so one head model serves many step-2 runs |
 | `containers/run_thermal.sbatch` | added | 2026-10-14 | Slurm GPU job: BabelBrain step 3 (thermal) on a step-2 head result |
-| `OfflineBatchExamples/ElementArray/run_txrx.py` | added | 2026-10-15 | Headless TxRx driver: domain built once, one FDTD run per transmit set and material parameter set (incl. a coupling layer with its own density, sound speed and attenuation, and a seeded bone HU texture on the CT path); echo-box crop; traces on a receive grid; PETRA path with `--petra` |
+| `OfflineBatchExamples/ElementArray/run_txrx.py` | added | 2026-10-15 | Headless TxRx driver: domain built once, one FDTD run per transmit set and material parameter set (incl. a coupling layer with its own density, sound speed and attenuation, and a seeded bone HU texture on the CT path); echo-box crop; traces on a receive grid; PETRA path with `--petra`; medium-setting diagnostics written to the output folder |
 | `containers/run_txrx.sbatch` | added | 2026-10-15 | Slurm GPU job running the TxRx driver (optionally twice, e.g. head then water) |
-| `OfflineBatchExamples/ElementArray/medium_params.py` | added | 2026-10-16 | Medium settings shared by the ElementArray drivers: material scales, gel properties for the water outside the tissue, coupling layer, seeded bone HU texture |
+| `OfflineBatchExamples/ElementArray/medium_params.py` | added | 2026-10-16 | Medium settings shared by the ElementArray drivers: material scales, gel properties for the water outside the tissue, coupling layer, seeded bone HU texture; air around the head except gel columns under the panels |
 
 ## Log
 
@@ -239,3 +239,11 @@ BabelBrain's GUI runs step 2 with `bPETRA=True` when the step-1 CT came from a P
 The gap between the transducer faces and the skin is filled with coupling gel, not water.
 - modified `OfflineBatchExamples/ElementArray/medium_params.py`: `gel_rho`, `gel_sos` and `gel_att_npm` replace the water row's density, speed and attenuation in head runs, i.e. everywhere outside the tissue. A coupling layer added in the same run sits on top of the gel. The speed may not exceed the fastest material (the time step is set before the settings apply). Checked on a mock domain: gel plus a 3 mm layer gives 5 material rows and 5 Q corrections, and the restore returns the original table.
 - modified `ANTIPHON_CHANGELOG.md`: table row and this entry.
+
+### 2026-10-28: Air around the head
+
+In a real session only the coupling gel between each panel and the scalp is wet; the rest of the head is in air, and skin against air reflects almost completely. The drivers had water everywhere outside the tissue, so sound reaching the scalp anywhere radiated away.
+- modified `OfflineBatchExamples/ElementArray/medium_params.py`: `outside_air` marks the water outside the head as air through BabelViscoFDTD's pressure-release `ReflectorMask` (the mechanism BabelBrain already uses for its air regions), except a gel column between each panel and the scalp: the panel's face footprint, widened by `gel_margin_mm` (default 10), from the domain edge to the first tissue along the panel axis. Water not connected to the domain edge is left as is; existing air regions are kept; element faces and a 3-voxel guard stay wet. The restore function puts the previous mask back. Checked on a synthetic head with the real 252-element array: panel axis found exactly, each gel footprint 80 cm2, 90 % of the outside water marked air, no tissue, element centre or interior pocket marked air.
+- modified `OfflineBatchExamples/ElementArray/run_txrx.py`: passes its output folder to the medium settings, which write `outside_air_slices.npz` (three orthogonal slices through the focus: water/gel, tissue, air, element faces) so the mask can be checked after a run.
+- modified `ANTIPHON_CHANGELOG.md`: table rows and this entry.
+

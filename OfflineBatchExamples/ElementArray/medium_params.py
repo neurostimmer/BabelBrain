@@ -8,11 +8,15 @@ simulation after its domain is built (Step1/Step2) and before the solve:
   bone_tex_sd_hu, bone_tex_ell_mm, bone_tex_seed
                                             CT path: a seeded Gaussian random HU field on the bone (new material rows
                                             from BabelBrain's own CT mappings)
+  outside_air, gel_margin_mm                air around the head (BabelViscoFDTD's pressure-release ReflectorMask,
+                                            as BabelBrain's air regions) except a gel column between each panel and
+                                            the scalp: the panel's face footprint widened by gel_margin_mm (default 10)
 """
 import numpy as np
 
 PARAM_KEYS = {"bone_att", "bone_sos", "skin_att", "brain_att", "gel_rho", "gel_sos", "gel_att_npm", "coupling_mm",
-              "coupling_rho", "coupling_sos", "coupling_att_npm", "bone_tex_sd_hu", "bone_tex_ell_mm", "bone_tex_seed"}
+              "coupling_rho", "coupling_sos", "coupling_att_npm", "bone_tex_sd_hu", "bone_tex_ell_mm", "bone_tex_seed",
+              "outside_air", "gel_margin_mm"}
 
 
 def hash_normal(i, j, k, seed):
@@ -75,6 +79,70 @@ def bone_texture(S, P, ct_hu, first_bone, q_bone, log):
         f"{len(levels)} new rows, speed {c.min():.0f}..{c.max():.0f} m/s (time step set for {c_max:.0f})")
 
 
+def outside_air(S, P, log, out=None):
+    """Mark the water outside the head as air (pressure release), except a gel column between each panel and the
+    scalp: the transverse footprint of the panel's element faces, widened by gel_margin_mm, from the domain edge to
+    the first tissue along the panel axis. Water not connected to the domain edge (pockets inside the head) is left
+    alone. Sets S._SubAirRegions (the ReflectorMask BabelBrain passes to the solver); returns the previous mask."""
+    from scipy import ndimage
+    from TranscranialModeling.BabelIntegrationELEMENT_ARRAY import ElementFacePoints
+    ea, h, mm = S._EA, S._SpatialStep, S._MaterialMap
+    orig = np.array([S._XDim[0], S._YDim[0], S._ZDim[0]])
+    shift = np.array([S._TxMechanicalAdjustmentX, S._TxMechanicalAdjustmentY, S._TxMechanicalAdjustmentZ])
+    cen = (ea["centers_m"] + shift - orig) / h
+    a = int(np.argmax(np.ptp(cen, axis=0)))             # panel axis: the grid axis the panels are separated along
+    mid = (cen[:, a].min() + cen[:, a].max()) / 2
+    sides = [np.flatnonzero(cen[:, a] < mid), np.flatnonzero(cen[:, a] >= mid)]
+    d = cen[sides[1]].mean(0) - cen[sides[0]].mean(0)
+    b, c = [k for k in range(3) if k != a]
+    tissue = np.moveaxis(mm != 0, a, -1)                # (n_b, n_c, n_a)
+    na = tissue.shape[-1]
+    has = tissue.any(-1)
+    first = np.where(has, tissue.argmax(-1), na)
+    last = np.where(has, na - 1 - tissue[..., ::-1].argmax(-1), -1)
+    del tissue
+    margin = float(P.get("gel_margin_mm", 10.0))
+    k = np.arange(na)
+    gel = np.zeros(has.shape + (na,), bool)
+    faces = np.zeros(mm.shape, bool)
+    for s, els in enumerate(sides):
+        ijk = np.concatenate([np.round((ElementFacePoints(ea, n, h / 3.0)[0] + shift - orig) / h).astype(np.int64)
+                              for n in els])
+        faces[ijk[:, 0], ijk[:, 1], ijk[:, 2]] = True
+        foot = np.zeros(has.shape, bool)
+        foot[ijk[:, b], ijk[:, c]] = True
+        foot = ndimage.distance_transform_edt(~foot) * h * 1e3 <= margin
+        n_open = int((foot & ~has).sum())
+        foot &= has
+        gel |= foot[..., None] & ((k[None, None, :] < first[..., None]) if s == 0 else (k[None, None, :] > last[..., None]))
+        log(f"outside air: panel {s} ({els.size} elements) gel footprint {foot.sum() * (h * 1e3) ** 2 / 100:.0f} cm2 "
+            f"(+{margin:g} mm), {n_open} footprint columns with no tissue left as air")
+    gel = np.moveaxis(gel, -1, a)
+    lab, _ = ndimage.label(mm == 0)
+    edge = np.unique(np.concatenate([lab[0].ravel(), lab[-1].ravel(), lab[:, 0].ravel(), lab[:, -1].ravel(),
+                                     lab[:, :, 0].ravel(), lab[:, :, -1].ravel()]))
+    air = np.isin(lab, edge[edge > 0])
+    del lab
+    n_out = int(air.sum())
+    air &= ~gel
+    air &= ~ndimage.binary_dilation(faces, iterations=3)
+    prev = getattr(S, "_SubAirRegions", None)
+    new = air if prev is None else (np.asarray(prev) != 0) | air
+    S._SubAirRegions = new.astype(np.uint32)
+    log(f"outside air: panel axis = grid axis {a} (panel-to-panel vector {np.degrees(np.arccos(abs(d[a]) / np.linalg.norm(d))):.2f} "
+        f"deg off it); outside water {n_out:,} voxels, gel {int((gel & (mm == 0)).sum()):,}, air {int(air.sum()):,} "
+        f"({100 * air.sum() / max(n_out, 1):.1f} % of the outside water){'; existing air regions kept' if prev is not None else ''}")
+    if out:
+        f = np.clip(np.asarray(S._FocalSpotLocation, np.int64), 0, np.array(mm.shape) - 1)
+        lab3 = np.where(S._SubAirRegions != 0, 2, (mm != 0)).astype(np.uint8)
+        lab3[faces] = 3
+        import os
+        np.savez_compressed(os.path.join(out, "outside_air_slices.npz"), axis=a, h_m=h, focus=f,
+                            s0=lab3[f[0], :, :], s1=lab3[:, f[1], :], s2=lab3[:, :, f[2]],
+                            legend="0 water/gel, 1 tissue, 2 air (pressure release), 3 element faces")
+    return prev
+
+
 def material_rows(use_ct, seg, n_mat):
     """Rows of BabelBrain's material table (Step1_InitializeConditions): 0 water, 1 skin, then
     CT path: 2 brain [3-5 white matter, grey matter, CSF if segmented], one row per bone HU level after that;
@@ -88,8 +156,9 @@ def material_rows(use_ct, seg, n_mat):
     return brain, bone
 
 
-def apply_params(sim, P, brain_rows, bone_rows, log, ct_hu=None):
-    """Scale materials in place, optionally texture the bone and add a coupling layer; returns a restore function."""
+def apply_params(sim, P, brain_rows, bone_rows, log, ct_hu=None, out=None):
+    """Scale materials in place, optionally put air around the head, texture the bone and add a coupling layer;
+    returns a restore function."""
     S = sim._SIM_SETTINGS
     mats0 = [list(r) for r in S._Materials]
     tex = P.get("bone_tex_sd_hu", 0) > 0
@@ -111,6 +180,9 @@ def apply_params(sim, P, brain_rows, bone_rows, log, ct_hu=None):
         M[0][1] = float(P.get("gel_sos", M[0][1]))
         M[0][3] = float(P.get("gel_att_npm", M[0][3]))
         log(f"gel (all water outside the tissue): rho {M[0][0]:.0f} kg/m3, c {M[0][1]:.0f} m/s, {M[0][3]:.2f} Np/m")
+    air0, air_set = None, False
+    if P.get("outside_air"):                           # on the original map: before any coupling layer
+        air0, air_set = outside_air(S, P, log, out), True
     if tex:
         bone_texture(S, P, ct_hu, bone_rows[0], float(np.ravel(q0)[bone_rows[0]]), log)
     if P.get("coupling_mm", 0) > 0:
@@ -137,4 +209,6 @@ def apply_params(sim, P, brain_rows, bone_rows, log, ct_hu=None):
         S._QCorrection = q0
         if map0 is not None:
             S._MaterialMap[...] = map0
+        if air_set:
+            S._SubAirRegions = air0
     return restore
